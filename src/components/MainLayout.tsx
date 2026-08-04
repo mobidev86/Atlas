@@ -2,6 +2,7 @@ import React from 'react';
 import { View, ScrollView, Pressable, Text, Alert } from 'react-native';
 import styles, { colors } from '../styles/styles';
 import { TabKey } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 const tabItems = [
   { key: 'home' as TabKey, icon: '⌂', label: 'Home' },
@@ -29,15 +30,13 @@ export function MainLayout({
   onTabPress,
 }: MainLayoutProps) {
   const handleLogout = () => {
-    Alert.alert(
-      'Sign out',
-      'Are you sure you want to sign out of Atlas?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign out', style: 'destructive', onPress: onBack },
-      ],
-    );
+    Alert.alert('Sign out', 'Are you sure you want to sign out of Atlas?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Sign out', style: 'destructive', onPress: onBack },
+    ]);
   };
+
+  const { user } = useAuth();
 
   return (
     <View style={styles.container}>
@@ -52,13 +51,21 @@ export function MainLayout({
             <Text style={styles.logoutIcon}>⎋</Text>
           </Pressable>
           {/* Avatar */}
-          <Pressable style={styles.avatar} onPress={() => onTabPress('profile')}>
-            <Text style={styles.avatarText}>O</Text>
+          <Pressable
+            style={styles.avatar}
+            onPress={() => onTabPress('profile')}
+          >
+            <Text style={styles.avatarText}>
+              {user?.fullName?.charAt(0).toUpperCase() ?? '-'}
+            </Text>
           </Pressable>
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         {children}
       </ScrollView>
 
@@ -66,10 +73,19 @@ export function MainLayout({
         {tabItems.map(tab => (
           <Pressable
             key={tab.key}
-            style={[styles.tab, activeTab === tab.key ? styles.activeTab : null]}
-            onPress={() => onTabPress(tab.key)}>
+            style={[
+              styles.tab,
+              activeTab === tab.key ? styles.activeTab : null,
+            ]}
+            onPress={() => onTabPress(tab.key)}
+          >
             <Text style={styles.tabIcon}>{tab.icon}</Text>
-            <Text style={[styles.tabLabel, activeTab === tab.key ? styles.activeTabLabel : null]}>
+            <Text
+              style={[
+                styles.tabLabel,
+                activeTab === tab.key ? styles.activeTabLabel : null,
+              ]}
+            >
               {tab.label}
             </Text>
           </Pressable>

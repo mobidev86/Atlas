@@ -12,7 +12,8 @@ export type ScreenName =
   | 'inbox'
   | 'reply'
   | 'confirm'
-  | 'profile';
+  | 'profile'
+  | '';
 
 export type TabKey = 'home' | 'travel' | 'dining' | 'inbox' | 'profile';
 
@@ -123,7 +124,13 @@ export interface BookingRecord {
   provider: string;
   price: string;
   subtitle?: string;
-  status: 'searching' | 'filtering' | 'confirming' | 'confirmed' | 'failed' | 'cancelled';
+  status:
+    | 'searching'
+    | 'filtering'
+    | 'confirming'
+    | 'confirmed'
+    | 'failed'
+    | 'cancelled';
   rawIntentPrompt?: string;
   structuredIntent?: TravelIntent;
   confirmationCode?: string;

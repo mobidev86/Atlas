@@ -1,5 +1,11 @@
-import React from 'react';
-import { View, Text, Pressable, TextInput } from 'react-native';
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  Pressable,
+  TextInput,
+  TouchableOpacity,
+} from 'react-native';
 import styles from '../styles/styles';
 
 // Badge Component
@@ -39,7 +45,13 @@ interface ResultCardProps {
   onPress: () => void;
 }
 
-export function ResultCard({ title, meta, price, badges, onPress }: ResultCardProps) {
+export function ResultCard({
+  title,
+  meta,
+  price,
+  badges,
+  onPress,
+}: ResultCardProps) {
   return (
     <Pressable style={styles.resultCardEnhanced} onPress={onPress}>
       <View style={styles.resultCardTop}>
@@ -106,6 +118,8 @@ interface InputFieldProps {
   placeholder: string;
   focusedInput: string | null;
   inputKey: string;
+  value: string;
+  onChangeText: (text: string) => void;
   onFocus: (key: string) => void;
   onBlur: () => void;
   secureTextEntry?: boolean;
@@ -116,22 +130,46 @@ export function InputField({
   placeholder,
   focusedInput,
   inputKey,
+  value,
+  onChangeText,
   onFocus,
   onBlur,
   secureTextEntry = false,
   keyboardType = 'default',
+  ...rest
 }: InputFieldProps) {
+  const [isVisible, setIsVisible] = useState(false);
+
   return (
-    <TextInput
-      style={[styles.input, focusedInput === inputKey && styles.inputFocused]}
-      placeholder={placeholder}
-      placeholderTextColor="#8A95A6"
-      secureTextEntry={secureTextEntry}
-      keyboardType={keyboardType}
-      autoCapitalize={keyboardType === 'email-address' ? 'none' : 'sentences'}
-      onFocus={() => onFocus(inputKey)}
-      onBlur={onBlur}
-    />
+    <View style={styles.wrapper}>
+      <TextInput
+        style={[
+          styles.input,
+          focusedInput === inputKey && styles.inputFocused,
+          secureTextEntry && styles.inputWithToggle,
+        ]}
+        placeholder={placeholder}
+        placeholderTextColor="#8A95A6"
+        value={value}
+        onChangeText={onChangeText}
+        secureTextEntry={secureTextEntry && !isVisible}
+        keyboardType={keyboardType}
+        autoCapitalize={keyboardType === 'email-address' ? 'none' : 'sentences'}
+        onFocus={() => onFocus(inputKey)}
+        onBlur={onBlur}
+        {...rest}
+      />
+      {secureTextEntry && (
+        <TouchableOpacity
+          style={styles.toggleButton}
+          onPress={() => setIsVisible(prev => !prev)}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.toggleText}>{isVisible ? 'Hide' : 'Show'}</Text>
+        </TouchableOpacity>
+      )}
+    </View>
   );
 }
 
@@ -198,7 +236,8 @@ interface LinkTextProps {
 }
 
 export function LinkText({ text, onPress, variant = 'auth' }: LinkTextProps) {
-  const linkStyle = variant === 'auth' ? styles.linkTextAuth : styles.linkTextPrimary;
+  const linkStyle =
+    variant === 'auth' ? styles.linkTextAuth : styles.linkTextPrimary;
   return (
     <Pressable onPress={onPress}>
       <Text style={linkStyle}>{text}</Text>

@@ -1,5 +1,5 @@
+import { UserProfile } from '../types/UserProfile';
 import { AuthService } from './authService';
-import { UserProfile } from '../types';
 
 export class SubscriptionService {
   /**
@@ -8,22 +8,35 @@ export class SubscriptionService {
   static async checkSubscription(): Promise<boolean> {
     const user = await AuthService.getCurrentUser();
     if (!user) return false;
-    return user.subscriptionStatus === 'active' || user.subscriptionStatus === 'trialing';
+    return (
+      user.subscriptionStatus === 'active' ||
+      user.subscriptionStatus === 'trialing'
+    );
   }
 
   /**
    * Process subscription activation (Stripe flow integration)
    */
-  static async subscribeUser(planTier: 'executive' | 'standard' = 'executive'): Promise<{ success: boolean; user: UserProfile | null; error: string | null }> {
+  static async subscribeUser(
+    planTier: 'executive' | 'standard' = 'executive',
+  ): Promise<{
+    success: boolean;
+    user: UserProfile | null;
+    error: string | null;
+  }> {
     try {
-      // In production, call Stripe Checkout / Supabase Edge Function:
-      // const response = await fetch(`${ENV.SUPABASE_URL}/functions/v1/create-checkout`, ...)
-      
-      // Update local profile subscription status
-      const updatedUser = AuthService.updateUserProfile({
+      const updatedUser = await AuthService.updateUserProfile({
         subscriptionStatus: 'active',
         subscriptionTier: planTier,
       });
+
+      if (!updatedUser) {
+        return {
+          success: false,
+          user: null,
+          error: 'Unable to update subscription.',
+        };
+      }
 
       return {
         success: true,
@@ -42,14 +55,20 @@ export class SubscriptionService {
   /**
    * Cancel subscription
    */
-  static async cancelSubscription(): Promise<{ success: boolean; error: string | null }> {
+  static async cancelSubscription(): Promise<{
+    success: boolean;
+    error: string | null;
+  }> {
     try {
       AuthService.updateUserProfile({
         subscriptionStatus: 'canceled',
       });
       return { success: true, error: null };
     } catch (err: any) {
-      return { success: false, error: err.message || 'Failed to cancel subscription' };
+      return {
+        success: false,
+        error: err.message || 'Failed to cancel subscription',
+      };
     }
   }
 }

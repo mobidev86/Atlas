@@ -1,40 +1,68 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { UserProfile, TravelPreferences, DiningPreferences } from '../types';
 import { AuthService } from '../services/authService';
 import { SubscriptionService } from '../services/subscriptionService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  DiningPreferences,
+  TravelPreferences,
+  UserProfile,
+} from '../types/UserProfile';
+
+const ONBOARDING_KEY = 'hasCompletedOnboarding';
 
 interface AuthContextType {
   user: UserProfile | null;
   isAuthenticated: boolean;
   isSubscribed: boolean;
   isLoading: boolean;
-  login: (email: string, password?: string) => Promise<{ success: boolean; error: string | null }>;
-  register: (email: string, password?: string, name?: string) => Promise<{ success: boolean; error: string | null }>;
+  hasCompletedOnboarding: boolean; // ✅ new
+  completeOnboarding: () => Promise<void>; // ✅ new, call this when "Get Started" is tapped
+  login: (
+    email: string,
+    password?: string,
+  ) => Promise<{ success: boolean; error: string | null }>;
+  register: (
+    email: string,
+    password?: string,
+    name?: string,
+  ) => Promise<{ success: boolean; error: string | null }>;
   logout: () => Promise<void>;
   subscribe: () => Promise<{ success: boolean; error: string | null }>;
-  updateTravelPreferences: (prefs: Partial<TravelPreferences>) => void;
-  updateDiningPreferences: (prefs: Partial<DiningPreferences>) => void;
-  toggleAutoBook: () => void;
-  toggleZeroRetention: () => void;
+  updateTravelPreferences: (prefs: Partial<TravelPreferences>) => Promise<void>;
+  updateDiningPreferences: (prefs: Partial<DiningPreferences>) => Promise<void>;
+  toggleAutoBook: () => Promise<void>;
+  toggleZeroRetention: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
 
   useEffect(() => {
     // Initial session load
+    const initAuth = async () => {
+      // Check onboarding flag first
+      const onboardingFlag = await AsyncStorage.getItem(ONBOARDING_KEY);
+      setHasCompletedOnboarding(onboardingFlag === 'true');
+    };
     AuthService.getCurrentUser().then(u => {
       setUser(u);
       setIsLoading(false);
     });
+    initAuth();
   }, []);
 
   const login = async (email: string, password?: string) => {
     setIsLoading(true);
-    const { user: loggedInUser, error } = await AuthService.login(email, password);
+    const { user: loggedInUser, error } = await AuthService.login(
+      email,
+      password,
+    );
     setIsLoading(false);
     if (error || !loggedInUser) {
       return { success: false, error: error || 'Login failed' };
@@ -45,7 +73,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const register = async (email: string, password?: string, name?: string) => {
     setIsLoading(true);
-    const { user: registeredUser, error } = await AuthService.register(email, password, name);
+    const { user: registeredUser, error } = await AuthService.register(
+      email,
+      password,
+      name,
+    );
     setIsLoading(false);
     if (error || !registeredUser) {
       return { success: false, error: error || 'Registration failed' };
@@ -59,48 +91,60 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
   };
 
+  const completeOnboarding = async () => {
+    await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
+    setHasCompletedOnboarding(true);
+  };
+
   const subscribe = async () => {
-    const { success, user: updatedUser, error } = await SubscriptionService.subscribeUser();
+    const {
+      success,
+      user: updatedUser,
+      error,
+    } = await SubscriptionService.subscribeUser();
     if (success && updatedUser) {
       setUser(updatedUser);
     }
     return { success, error };
   };
 
-  const updateTravelPreferences = (prefs: Partial<TravelPreferences>) => {
+  const updateTravelPreferences = async (prefs: Partial<TravelPreferences>) => {
     if (!user) return;
-    const updated = AuthService.updateUserProfile({
+    const updated = await AuthService.updateUserProfile({
       travelPreferences: { ...user.travelPreferences, ...prefs },
     });
     if (updated) setUser({ ...updated });
   };
 
-  const updateDiningPreferences = (prefs: Partial<DiningPreferences>) => {
+  const updateDiningPreferences = async (prefs: Partial<DiningPreferences>) => {
     if (!user) return;
-    const updated = AuthService.updateUserProfile({
+    const updated = await AuthService.updateUserProfile({
       diningPreferences: { ...user.diningPreferences, ...prefs },
     });
     if (updated) setUser({ ...updated });
   };
 
-  const toggleAutoBook = () => {
+  const toggleAutoBook = async () => {
     if (!user) return;
-    const updated = AuthService.updateUserProfile({
+    const updated = await AuthService.updateUserProfile({
       autoBookEnabled: !user.autoBookEnabled,
     });
     if (updated) setUser({ ...updated });
   };
 
-  const toggleZeroRetention = () => {
+  const toggleZeroRetention = async () => {
     if (!user) return;
-    const updated = AuthService.updateUserProfile({
+    const updated = await AuthService.updateUserProfile({
       zeroRetentionEnabled: !user.zeroRetentionEnabled,
     });
     if (updated) setUser({ ...updated });
   };
 
   const isAuthenticated = !!user;
-  const isSubscribed = !!user && (user.subscriptionStatus === 'active' || user.subscriptionStatus === 'trialing');
+  const isSubscribed =
+    !!user &&
+    (user.subscriptionStatus === 'active' ||
+      user.subscriptionStatus === 'trialing');
 
   return (
     <AuthContext.Provider
@@ -109,6 +153,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAuthenticated,
         isSubscribed,
         isLoading,
+        hasCompletedOnboarding,
+        completeOnboarding,
         login,
         register,
         logout,
@@ -117,7 +163,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updateDiningPreferences,
         toggleAutoBook,
         toggleZeroRetention,
-      }}>
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

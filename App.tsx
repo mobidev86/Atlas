@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, StatusBar } from 'react-native';
-import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  SafeAreaProvider,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 import styles from './src/styles/styles';
 import {
   SplashScreen,
@@ -17,7 +20,8 @@ import {
 } from './src/screens';
 import { MainLayout } from './src/components/MainLayout';
 import { AuthMode, ScreenName, TabKey, ConfirmationState } from './src/types';
-import { AuthProvider } from './src/context/AuthContext';
+import { AuthProvider, useAuth } from './src/context/AuthContext';
+import { AuthService } from './src/services/authService';
 
 function App() {
   return (
@@ -32,7 +36,7 @@ function App() {
 
 function AppContent() {
   const safeAreaInsets = useSafeAreaInsets();
-  const [screen, setScreen] = useState<ScreenName>('splash');
+  const [screen, setScreen] = useState<ScreenName>('');
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [activeTab, setActiveTab] = useState<TabKey>('home');
   const [confirmation, setConfirmation] = useState<ConfirmationState>({
@@ -41,6 +45,40 @@ function AppContent() {
     price: '',
     subtitle: 'Added to your itinerary',
   });
+  const {
+    user,
+    isLoading,
+    logout,
+    hasCompletedOnboarding,
+    completeOnboarding,
+    isSubscribed,
+    subscribe,
+  } = useAuth();
+
+  console.log('AppContent render:', { screen, authMode, activeTab, user });
+
+  useEffect(() => {
+    if (isLoading) return;
+    if (user) {
+      if (!isSubscribed) {
+        if (screen !== 'subscribe' && screen !== 'onboard') {
+          setScreen('subscribe');
+        }
+      } else {
+        if (screen !== 'onboard') {
+          setScreen('home');
+        }
+      }
+    } else if (!hasCompletedOnboarding) {
+      setScreen('splash');
+    } else if (
+      screen !== 'register' &&
+      screen !== 'subscribe' &&
+      screen !== 'onboard'
+    ) {
+      setScreen('login');
+    }
+  }, [user, isLoading, hasCompletedOnboarding]);
 
   const navigateTo = (nextScreen: ScreenName, nextTab?: TabKey) => {
     setScreen(nextScreen);
@@ -50,8 +88,28 @@ function AppContent() {
   };
 
   const bookItem = (item: string, provider: string, price: string) => {
-    setConfirmation({ item, provider, price, subtitle: `Booked via ${provider}` });
+    setConfirmation({
+      item,
+      provider,
+      price,
+      subtitle: `Booked via ${provider}`,
+    });
     setScreen('confirm');
+  };
+
+  const formatCurrentDate = () => {
+    const date = new Date();
+
+    const weekday = new Intl.DateTimeFormat('en-US', {
+      weekday: 'long',
+    }).format(date);
+
+    const monthDay = new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+    }).format(date);
+
+    return `${weekday} · ${monthDay}`;
   };
 
   const renderScreen = () => {
@@ -66,18 +124,36 @@ function AppContent() {
               setAuthMode(nextMode);
               setScreen(nextMode);
             }}
-            onSubmit={() => navigateTo(authMode === 'register' ? 'subscribe' : 'home')}
+            onSubmit={(success: boolean) => {
+              if (success) {
+                navigateTo(authMode === 'register' ? 'subscribe' : 'home');
+              }
+            }}
           />
         );
       case 'subscribe':
         return (
           <SubscribeScreen
             onSubscribe={() => navigateTo('onboard')}
-            onBack={() => navigateTo('register')}
+            onBack={() => {
+              setAuthMode('login');
+              navigateTo('login');
+            }}
           />
         );
       case 'onboard':
-        return <OnboardScreen onContinue={() => navigateTo('home')} />;
+        return (
+          <OnboardScreen
+            onContinue={async () => {
+              const { success, error } = await subscribe();
+              if (!success) {
+                console.log('Subscribe failed:', error);
+                return; // stay on onboard screen if it fails
+              }
+              navigateTo('home');
+            }}
+          />
+        );
       case 'travel':
         return (
           <MainLayout
@@ -88,7 +164,8 @@ function AppContent() {
             onTabPress={tab => {
               setActiveTab(tab);
               navigateTo(tab, tab);
-            }}>
+            }}
+          >
             <TravelScreen onBook={bookItem} />
           </MainLayout>
         );
@@ -102,7 +179,8 @@ function AppContent() {
             onTabPress={tab => {
               setActiveTab(tab);
               navigateTo(tab, tab);
-            }}>
+            }}
+          >
             <DiningScreen onBook={bookItem} />
           </MainLayout>
         );
@@ -116,7 +194,8 @@ function AppContent() {
             onTabPress={tab => {
               setActiveTab(tab);
               navigateTo(tab, tab);
-            }}>
+            }}
+          >
             <InboxScreen onOpenReply={() => navigateTo('reply')} />
           </MainLayout>
         );
@@ -130,7 +209,8 @@ function AppContent() {
             onTabPress={tab => {
               setActiveTab(tab);
               navigateTo(tab, tab);
-            }}>
+            }}
+          >
             <ReplyScreen onSend={() => navigateTo('inbox')} />
           </MainLayout>
         );
@@ -144,7 +224,8 @@ function AppContent() {
             onTabPress={tab => {
               setActiveTab(tab);
               navigateTo(tab, tab);
-            }}>
+            }}
+          >
             <ConfirmScreen confirmation={confirmation} />
           </MainLayout>
         );
@@ -158,22 +239,31 @@ function AppContent() {
             onTabPress={tab => {
               setActiveTab(tab);
               navigateTo(tab, tab);
-            }}>
-            <ProfileScreen onLogout={() => navigateTo('login')} />
+            }}
+          >
+            <ProfileScreen
+              onLogout={async () => {
+                await logout();
+                navigateTo('login');
+              }}
+            />
           </MainLayout>
         );
       case 'home':
-      default:
         return (
           <MainLayout
-            title="Evening, Omar"
-            subtitle="Thursday · Jul 16"
-            onBack={() => navigateTo('splash')}
+            title={`Hello, ${user?.fullName ?? 'Traveler'}`}
+            subtitle={formatCurrentDate()}
+            onBack={async () => {
+              await logout();
+              navigateTo('login');
+            }}
             activeTab={activeTab}
             onTabPress={tab => {
               setActiveTab(tab);
               navigateTo(tab, tab);
-            }}>
+            }}
+          >
             <HomeScreen
               onOpenTravel={() => navigateTo('travel')}
               onOpenDining={() => navigateTo('dining')}
@@ -182,7 +272,20 @@ function AppContent() {
           </MainLayout>
         );
       case 'splash':
-        return <SplashScreen onStart={() => navigateTo('login')} onSkip={() => navigateTo('home')} />;
+        return (
+          <SplashScreen
+            onStart={async () => {
+              await completeOnboarding();
+              navigateTo('login');
+            }}
+            onSkip={async () => {
+              await completeOnboarding();
+              navigateTo('home');
+            }}
+          />
+        );
+      default:
+        return <View />;
     }
   };
 
@@ -190,9 +293,14 @@ function AppContent() {
     <View
       style={[
         styles.screenRoot,
-        { paddingTop: safeAreaInsets.top, paddingBottom: safeAreaInsets.bottom },
-      ]}>
+        {
+          paddingTop: safeAreaInsets.top,
+          paddingBottom: safeAreaInsets.bottom,
+        },
+      ]}
+    >
       {renderScreen()}
+      {/* {isLoading ? <View></View> : renderScreen()} */}
     </View>
   );
 }
