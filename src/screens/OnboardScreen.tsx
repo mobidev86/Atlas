@@ -1,6 +1,7 @@
 import React from 'react';
-import { View, ScrollView, Text, Pressable } from 'react-native';
-import styles from '../styles/styles';
+import { View, ScrollView, Text } from 'react-native';
+import Ionicons from '@react-native-vector-icons/ionicons';
+import styles, { colors } from '../styles/styles';
 import { PrimaryButton, GhostButtonSmall } from '../components';
 
 interface OnboardScreenProps {
@@ -22,7 +23,7 @@ export function OnboardScreen({ onContinue }: OnboardScreenProps) {
 
       <View style={styles.connectionCard}>
         <View style={[styles.iconWrap, styles.navyTint]}>
-          <Text style={styles.iconText}>📧</Text>
+          <Ionicons name="mail-outline" size={20} color={colors.navy} />
         </View>
         <View style={styles.moduleBodyExpanded}>
           <Text style={styles.rowTitle}>Email & calendar</Text>
@@ -33,7 +34,7 @@ export function OnboardScreen({ onContinue }: OnboardScreenProps) {
 
       <View style={styles.connectionCard}>
         <View style={[styles.iconWrap, styles.goldTint]}>
-          <Text style={styles.iconText}>🎙️</Text>
+          <Ionicons name="mic-outline" size={20} color={colors.rustBrown} />
         </View>
         <View style={styles.moduleBodyExpanded}>
           <Text style={styles.rowTitle}>Voice dictation</Text>

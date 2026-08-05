@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Pressable, Text } from 'react-native';
-import styles from '../styles/styles';
+import Ionicons from '@react-native-vector-icons/ionicons';
+import styles, { colors } from '../styles/styles';
 import { SecondaryButton } from '../components';
 import { TodoService } from '../services/todoService';
 import { TodoItem } from '../types';
@@ -50,7 +51,7 @@ export function HomeScreen({ onOpenTravel, onOpenDining, onOpenInbox }: HomeScre
 
       <Pressable style={styles.moduleCard} onPress={onOpenTravel}>
         <View style={[styles.iconWrap, styles.navyTint]}>
-          <Text style={styles.iconText}>✈️</Text>
+          <Ionicons name="airplane" size={20} color={colors.navy} />
         </View>
         <View style={styles.moduleBody}>
           <Text style={styles.moduleTitle}>Travel & hotels</Text>
@@ -60,7 +61,7 @@ export function HomeScreen({ onOpenTravel, onOpenDining, onOpenInbox }: HomeScre
 
       <Pressable style={styles.moduleCard} onPress={onOpenDining}>
         <View style={[styles.iconWrap, styles.rustTint]}>
-          <Text style={styles.iconText}>🍽️</Text>
+          <Ionicons name="restaurant" size={20} color={colors.rustBrown} />
         </View>
         <View style={styles.moduleBody}>
           <Text style={styles.moduleTitle}>Dining</Text>
@@ -70,7 +71,7 @@ export function HomeScreen({ onOpenTravel, onOpenDining, onOpenInbox }: HomeScre
 
       <Pressable style={styles.moduleCard} onPress={onOpenInbox}>
         <View style={[styles.iconWrap, styles.goldTint]}>
-          <Text style={styles.iconText}>📧</Text>
+          <Ionicons name="mail" size={20} color={colors.navy} />
         </View>
         <View style={styles.moduleBody}>
           <Text style={styles.moduleTitle}>Inbox & replies</Text>
@@ -96,7 +97,7 @@ export function HomeScreen({ onOpenTravel, onOpenDining, onOpenInbox }: HomeScre
           style={[styles.todoCard, todo.done && styles.todoCardDone]}
           onPress={() => toggleTodo(todo.id)}>
           <View style={[styles.todoCheckbox, todo.done && styles.todoCheckboxDone]}>
-            {todo.done && <Text style={styles.todoCheckmark}>✓</Text>}
+            {todo.done && <Ionicons name="checkmark" size={14} color="#FFFFFF" />}
           </View>
           <View style={styles.todoBody}>
             <Text style={[styles.todoLabel, todo.done && styles.todoLabelDone]}>

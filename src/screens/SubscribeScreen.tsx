@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { View, ScrollView, Text, Pressable } from 'react-native';
-import styles from '../styles/styles';
+import Ionicons from '@react-native-vector-icons/ionicons';
+import type { IoniconsIconName } from '@react-native-vector-icons/ionicons';
+import styles, { colors } from '../styles/styles';
 import { PrimaryButton } from '../components';
 import { useAuth } from '../context/AuthContext';
 
@@ -9,12 +11,12 @@ interface SubscribeScreenProps {
   onBack: () => void;
 }
 
-const FEATURES = [
-  { icon: '✈️', label: 'Travel & hotel bookings', sub: 'Flights, stays, and itinerary coordination' },
-  { icon: '🍽️', label: 'Dining reservations', sub: 'Discover and reserve the perfect table' },
-  { icon: '📧', label: 'Inbox & smart replies', sub: 'AI-drafted replies to priority mail' },
-  { icon: '🗓️', label: 'Daily task planning', sub: 'Auto-organised to-do list every morning' },
-  { icon: '🎙️', label: 'Voice dictation', sub: 'Hands-free via Whisper integration' },
+const FEATURES: { icon: IoniconsIconName; label: string; sub: string }[] = [
+  { icon: 'airplane-outline', label: 'Travel & hotel bookings', sub: 'Flights, stays, and itinerary coordination' },
+  { icon: 'restaurant-outline', label: 'Dining reservations', sub: 'Discover and reserve the perfect table' },
+  { icon: 'mail-outline', label: 'Inbox & smart replies', sub: 'AI-drafted replies to priority mail' },
+  { icon: 'calendar-outline', label: 'Daily task planning', sub: 'Auto-organised to-do list every morning' },
+  { icon: 'mic-outline', label: 'Voice dictation', sub: 'Hands-free via Whisper integration' },
 ];
 
 export function SubscribeScreen({ onSubscribe, onBack }: SubscribeScreenProps) {
@@ -60,20 +62,20 @@ export function SubscribeScreen({ onSubscribe, onBack }: SubscribeScreenProps) {
         {FEATURES.map((f, i) => (
           <View key={i} style={styles.subscribeFeatureRow}>
             <View style={[styles.subscribeFeatureIcon, styles.navyTint]}>
-              <Text style={styles.iconText}>{f.icon}</Text>
+              <Ionicons name={f.icon} size={18} color={colors.navy} />
             </View>
             <View style={styles.subscribeFeatureBody}>
               <Text style={styles.subscribeFeatureTitle}>{f.label}</Text>
               <Text style={styles.subscribeFeatureSub}>{f.sub}</Text>
             </View>
-            <Text style={styles.subscribeCheckmark}>✓</Text>
+            <Ionicons name="checkmark-circle" size={18} color={colors.navy} />
           </View>
         ))}
       </View>
 
       {/* Guarantee */}
       <View style={styles.subscribeGuaranteeCard}>
-        <Text style={styles.subscribeGuaranteeIcon}>🔒</Text>
+        <Ionicons name="lock-closed-outline" size={24} color={colors.rustBrown} style={{ marginRight: 12 }} />
         <View style={styles.subscribeGuaranteeBody}>
           <Text style={styles.subscribeGuaranteeTitle}>Risk-free guarantee</Text>
           <Text style={styles.subscribeGuaranteeSub}>

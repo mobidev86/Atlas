@@ -83,6 +83,76 @@ export class ProfileService {
   }
 
   /**
+   * Get currently authenticated Supabase user
+   */
+  static async getCurrentAuthUser(): Promise<{
+    user:
+      | Awaited<ReturnType<typeof supabase.auth.getUser>>['data']['user']
+      | null;
+    error: string | null;
+  }> {
+    try {
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
+
+      if (error) {
+        return {
+          user: null,
+          error: error.message,
+        };
+      }
+
+      return {
+        user,
+        error: null,
+      };
+    } catch (error: any) {
+      return {
+        user: null,
+        error: error?.message ?? 'Unable to get authenticated user.',
+      };
+    }
+  }
+
+  /**
+   * Update currently authenticated user's profile
+   */
+  static async updateCurrentProfile(updates: Partial<UserProfile>): Promise<{
+    user: UserProfile | null;
+    error: string | null;
+  }> {
+    try {
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
+
+      if (error) {
+        return {
+          user: null,
+          error: error.message,
+        };
+      }
+
+      if (!user) {
+        return {
+          user: null,
+          error: 'User is not authenticated.',
+        };
+      }
+
+      return await this.updateProfile(user.id, updates);
+    } catch (error: any) {
+      return {
+        user: null,
+        error: error?.message ?? 'Unable to update current profile.',
+      };
+    }
+  }
+
+  /**
    * Create profile after signup
    */
   static async createProfile(profile: Partial<UserProfile>): Promise<{

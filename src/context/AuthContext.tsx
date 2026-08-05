@@ -147,12 +147,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!user) {
       return;
     }
-    const result = await ProfileService.updateProfile(user.id, {
+
+    const result = await ProfileService.updateCurrentProfile({
       travelPreferences: {
         ...user.travelPreferences,
         ...prefs,
       },
     });
+
     if (result.user) {
       setUser(result.user);
     }
@@ -162,12 +164,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!user) {
       return;
     }
-    const result = await ProfileService.updateProfile(user.id, {
+
+    const result = await ProfileService.updateCurrentProfile({
       diningPreferences: {
         ...user.diningPreferences,
         ...prefs,
       },
     });
+
     if (result.user) {
       setUser(result.user);
     }
@@ -177,9 +181,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!user) {
       return;
     }
-    const result = await ProfileService.updateProfile(user.id, {
+
+    const result = await ProfileService.updateCurrentProfile({
       autoBookEnabled: !user.autoBookEnabled,
     });
+
     if (result.user) {
       setUser(result.user);
     }
@@ -189,9 +195,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!user) {
       return;
     }
-    const result = await ProfileService.updateProfile(user.id, {
+
+    const result = await ProfileService.updateCurrentProfile({
       zeroRetentionEnabled: !user.zeroRetentionEnabled,
     });
+
     if (result.user) {
       setUser(result.user);
     }

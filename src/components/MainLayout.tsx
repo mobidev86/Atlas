@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, ScrollView, Pressable, Text, Alert } from 'react-native';
-import styles from '../styles/styles';
+import Ionicons from '@react-native-vector-icons/ionicons';
+import styles, { colors } from '../styles/styles';
 import { useAuth } from '../context/AuthContext';
 import { useNavigation } from '@react-navigation/native';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
@@ -56,7 +57,7 @@ export function MainLayout({
         </View>
         <View style={styles.headerRight}>
           <Pressable style={styles.logoutBtn} onPress={handleLogout}>
-            <Text style={styles.logoutIcon}>⎋</Text>
+            <Ionicons name="log-out-outline" size={20} color={colors.charcoal} />
           </Pressable>
           <Pressable
             style={styles.avatar}

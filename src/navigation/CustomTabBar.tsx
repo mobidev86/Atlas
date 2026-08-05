@@ -1,14 +1,16 @@
 import React from 'react';
 import { View, Pressable, Text } from 'react-native';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import styles from '../styles/styles';
+import Ionicons from '@react-native-vector-icons/ionicons';
+import type { IoniconsIconName } from '@react-native-vector-icons/ionicons';
+import styles, { colors } from '../styles/styles';
 
-const tabIcons: Record<string, string> = {
-  Home: '⌂',
-  Travel: '✈️',
-  Dining: '🍽️',
-  Inbox: '📧',
-  Profile: '👤',
+const tabIconNames: Record<string, { outline: IoniconsIconName; filled: IoniconsIconName }> = {
+  Home: { outline: 'home-outline', filled: 'home' },
+  Travel: { outline: 'airplane-outline', filled: 'airplane' },
+  Dining: { outline: 'restaurant-outline', filled: 'restaurant' },
+  Inbox: { outline: 'mail-outline', filled: 'mail' },
+  Profile: { outline: 'person-outline', filled: 'person' },
 };
 
 export function CustomTabBar({
@@ -28,6 +30,12 @@ export function CustomTabBar({
             : route.name;
 
         const isFocused = state.index === index;
+        const iconConfig = tabIconNames[route.name] || {
+          outline: 'ellipse-outline' as IoniconsIconName,
+          filled: 'ellipse' as IoniconsIconName,
+        };
+        const iconName = isFocused ? iconConfig.filled : iconConfig.outline;
+        const iconColor = isFocused ? colors.navy : colors.slateGray;
 
         const onPress = () => {
           const event = navigation.emit({
@@ -47,7 +55,12 @@ export function CustomTabBar({
             style={[styles.tab, isFocused ? styles.activeTab : null]}
             onPress={onPress}
           >
-            <Text style={styles.tabIcon}>{tabIcons[route.name] || '•'}</Text>
+            <Ionicons
+              name={iconName}
+              size={20}
+              color={iconColor}
+              style={{ marginBottom: 2 }}
+            />
             <Text
               style={[
                 styles.tabLabel,
