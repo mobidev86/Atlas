@@ -16,6 +16,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isSubscribed: boolean;
   isLoading: boolean;
+  isInitialLoading: boolean;
   hasCompletedOnboarding: boolean;
   completeOnboarding: () => Promise<void>;
   login: (
@@ -48,7 +49,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(true);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
 
   /**
@@ -56,12 +58,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
    */
   useEffect(() => {
     const initAuth = async () => {
-      // Check onboarding flag first
-      const onboardingFlag = await AsyncStorage.getItem(ONBOARDING_KEY);
-      setHasCompletedOnboarding(onboardingFlag === 'true');
+      try {
+        const onboardingFlag = await AsyncStorage.getItem(ONBOARDING_KEY);
+        setHasCompletedOnboarding(onboardingFlag === 'true');
+        const result = await AuthService.restoreSession();
+        setUser(result.user);
+      } finally {
+        setIsInitialLoading(false);
+      }
     };
     initAuth();
-    restoreSession();
+
     const { data: listener } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
         if (!session) {
@@ -203,6 +210,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         isAuthenticated,
         isSubscribed,
         isLoading,
+        isInitialLoading,
         hasCompletedOnboarding,
         completeOnboarding,
         login,

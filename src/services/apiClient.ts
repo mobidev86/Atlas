@@ -85,7 +85,7 @@ export async function apiRequest<T>(
       if (attempt <= retries) {
         // Exponential backoff wait (e.g. 500ms, 1000ms, 2000ms)
         const delay = Math.pow(2, attempt) * 250;
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await new Promise<void>(resolve => setTimeout(() => resolve(), delay));
       }
     }
   }

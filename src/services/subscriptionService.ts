@@ -1,12 +1,13 @@
 import { UserProfile } from '../types/UserProfile';
 import { AuthService } from './authService';
+import { ProfileService } from './profileService';
 
 export class SubscriptionService {
   /**
    * Verify if the user has an active subscription to access features
    */
   static async checkSubscription(): Promise<boolean> {
-    const user = await AuthService.getCurrentUser();
+    const { user } = await AuthService.getCurrentUser();
     if (!user) return false;
     return (
       user.subscriptionStatus === 'active' ||
@@ -25,16 +26,28 @@ export class SubscriptionService {
     error: string | null;
   }> {
     try {
-      const updatedUser = await AuthService.updateUserProfile({
-        subscriptionStatus: 'active',
-        subscriptionTier: planTier,
-      });
+      const { user } = await AuthService.getCurrentUser();
+      if (!user) {
+        return {
+          success: false,
+          user: null,
+          error: 'User not authenticated.',
+        };
+      }
+
+      const { user: updatedUser, error } = await ProfileService.updateProfile(
+        user.id,
+        {
+          subscriptionStatus: 'active',
+          subscriptionTier: planTier,
+        },
+      );
 
       if (!updatedUser) {
         return {
           success: false,
           user: null,
-          error: 'Unable to update subscription.',
+          error: error || 'Unable to update subscription.',
         };
       }
 
@@ -60,7 +73,12 @@ export class SubscriptionService {
     error: string | null;
   }> {
     try {
-      AuthService.updateUserProfile({
+      const { user } = await AuthService.getCurrentUser();
+      if (!user) {
+        return { success: false, error: 'User not authenticated.' };
+      }
+
+      await ProfileService.updateProfile(user.id, {
         subscriptionStatus: 'canceled',
       });
       return { success: true, error: null };

@@ -38,35 +38,8 @@ export interface SearchResult {
 }
 
 // User Profile & Preferences
-export interface TravelPreferences {
-  seatType: 'aisle' | 'window' | 'middle';
-  minHotelRating: number;
-  cabinClass: 'economy' | 'premium_economy' | 'business' | 'first';
-  preferredAirlines?: string[];
-  preferredHotelChains?: string[];
-}
+export * from './UserProfile';
 
-export interface DiningPreferences {
-  ambiance: 'quiet' | 'lively' | 'casual' | 'romantic' | 'fine_dining';
-  dietaryRestrictions: string[];
-  preferredCuisines?: string[];
-}
-
-export interface UserProfile {
-  id: string;
-  email: string;
-  fullName?: string;
-  stripeCustomerId?: string;
-  subscriptionStatus: 'active' | 'trialing' | 'canceled' | 'none';
-  subscriptionTier?: 'executive' | 'standard';
-  autoBookEnabled: boolean;
-  zeroRetentionEnabled: boolean;
-  travelPreferences: TravelPreferences;
-  diningPreferences: DiningPreferences;
-  nylasGrantId?: string;
-  nylasAccountStatus: 'connected' | 'syncing' | 'disconnected';
-  lastEmailSyncedAt?: string;
-}
 
 // ToDo List Types
 export interface TodoItem {

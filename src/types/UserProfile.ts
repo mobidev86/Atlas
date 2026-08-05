@@ -1,14 +1,24 @@
+export type SeatType = 'aisle' | 'window' | 'middle';
+export type CabinClass = 'economy' | 'premium_economy' | 'business' | 'first';
+export type AmbianceType =
+  | 'quiet'
+  | 'lively'
+  | 'casual'
+  | 'romantic'
+  | 'fine_dining';
+
 export interface TravelPreferences {
-  seatType: string;
+  seatType: SeatType;
   minHotelRating: number;
-  cabinClass: string;
-  preferredAirlines: string[];
+  cabinClass: CabinClass;
+  preferredAirlines?: string[];
+  preferredHotelChains?: string[];
 }
 
 export interface DiningPreferences {
-  ambiance: string;
+  ambiance: AmbianceType;
   dietaryRestrictions: string[];
-  preferredCuisines: string[];
+  preferredCuisines?: string[];
 }
 
 export interface UserProfile {
