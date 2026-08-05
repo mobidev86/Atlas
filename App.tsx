@@ -55,8 +55,6 @@ function AppContent() {
     subscribe,
   } = useAuth();
 
-  console.log('AppContent render:', { screen, authMode, activeTab, user });
-
   useEffect(() => {
     if (isLoading) return;
     if (user) {
@@ -147,7 +145,6 @@ function AppContent() {
             onContinue={async () => {
               const { success, error } = await subscribe();
               if (!success) {
-                console.log('Subscribe failed:', error);
                 return; // stay on onboard screen if it fails
               }
               navigateTo('home');

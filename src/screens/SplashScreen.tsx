@@ -1,7 +1,17 @@
-import React, { useState } from 'react';
-import { View, Pressable, Text } from 'react-native';
+import React, { useRef, useState } from 'react';
+import {
+  View,
+  Pressable,
+  Text,
+  ScrollView,
+  Dimensions,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+} from 'react-native';
 import styles from '../styles/styles';
 import { PrimaryButton, LinkText } from '../components';
+
+const { width } = Dimensions.get('window');
 
 interface SplashScreenProps {
   onStart: () => void;
@@ -11,12 +21,14 @@ interface SplashScreenProps {
 const slides = [
   {
     title: 'Atlas',
-    subtitle: 'Book travel, find a table, and clear your inbox — with a word, not a form.',
+    subtitle:
+      'Book travel, find a table, and clear your inbox — with a word, not a form.',
     icon: 'A',
   },
   {
     title: 'Travel',
-    subtitle: 'Find flights, hotels, and experiences. All through natural conversation.',
+    subtitle:
+      'Find flights, hotels, and experiences. All through natural conversation.',
     icon: '✈️',
   },
   {
@@ -28,23 +40,59 @@ const slides = [
 
 export function SplashScreen({ onStart, onSkip }: SplashScreenProps) {
   const [activeSlide, setActiveSlide] = useState(0);
+  const scrollRef = useRef<ScrollView>(null);
+
+  const onScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const index = Math.round(event.nativeEvent.contentOffset.x / width);
+    setActiveSlide(index);
+  };
 
   return (
     <View style={styles.splashRoot}>
       {/* Slides — manual dot-driven, no ScrollView flex waste */}
-      <View style={styles.splashSlide}>
-        <View style={styles.brandBadgeLarge}>
-          <Text style={styles.brandBadgeTextLarge}>{slides[activeSlide].icon}</Text>
-        </View>
-        <Text style={styles.brandTitleLarge}>{slides[activeSlide].title}</Text>
-        <Text style={styles.brandSubtitleLarge}>{slides[activeSlide].subtitle}</Text>
-      </View>
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onMomentumScrollEnd={onScrollEnd}
+      >
+        {slides.map((slide, index) => (
+          <View
+            key={index}
+            style={[
+              styles.splashSlide,
+              {
+                width,
+              },
+            ]}
+          >
+            <View style={styles.brandBadgeLarge}>
+              <Text style={styles.brandBadgeTextLarge}>{slide.icon}</Text>
+            </View>
+            <Text style={styles.brandTitleLarge}>{slide.title}</Text>
+            <Text style={styles.brandSubtitleLarge}>{slide.subtitle}</Text>
+          </View>
+        ))}
+      </ScrollView>
 
       {/* Dot navigation */}
       <View style={styles.dotRow}>
         {slides.map((_, index) => (
-          <Pressable key={index} onPress={() => setActiveSlide(index)}>
-            <View style={[styles.dot, activeSlide === index && styles.dotActive]} />
+          <Pressable
+            key={index}
+            onPress={() => {
+              setActiveSlide(index);
+
+              scrollRef.current?.scrollTo({
+                x: index * width,
+                animated: true,
+              });
+            }}
+          >
+            <View
+              style={[styles.dot, activeSlide === index && styles.dotActive]}
+            />
           </Pressable>
         ))}
       </View>

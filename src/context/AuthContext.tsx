@@ -1,33 +1,41 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { AuthService } from '../services/authService';
 import { SubscriptionService } from '../services/subscriptionService';
+import { supabase } from '../services/supabase';
+import { ProfileService } from '../services/profileService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   DiningPreferences,
   TravelPreferences,
   UserProfile,
 } from '../types/UserProfile';
-
-const ONBOARDING_KEY = 'hasCompletedOnboarding';
+import { ONBOARDING_KEY } from '../config/constants';
 
 interface AuthContextType {
   user: UserProfile | null;
   isAuthenticated: boolean;
   isSubscribed: boolean;
   isLoading: boolean;
-  hasCompletedOnboarding: boolean; // ✅ new
-  completeOnboarding: () => Promise<void>; // ✅ new, call this when "Get Started" is tapped
+  hasCompletedOnboarding: boolean;
+  completeOnboarding: () => Promise<void>;
   login: (
     email: string,
-    password?: string,
-  ) => Promise<{ success: boolean; error: string | null }>;
+    password: string,
+  ) => Promise<{
+    success: boolean;
+    error: string | null;
+  }>;
   register: (
     email: string,
-    password?: string,
+    password: string,
     name?: string,
-  ) => Promise<{ success: boolean; error: string | null }>;
+  ) => Promise<{
+    success: boolean;
+    error: string | null;
+  }>;
   logout: () => Promise<void>;
   subscribe: () => Promise<{ success: boolean; error: string | null }>;
+  refreshProfile: () => Promise<void>;
   updateTravelPreferences: (prefs: Partial<TravelPreferences>) => Promise<void>;
   updateDiningPreferences: (prefs: Partial<DiningPreferences>) => Promise<void>;
   toggleAutoBook: () => Promise<void>;
@@ -43,52 +51,72 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
 
+  /**
+   * Restore session when app launches
+   */
   useEffect(() => {
-    // Initial session load
     const initAuth = async () => {
       // Check onboarding flag first
       const onboardingFlag = await AsyncStorage.getItem(ONBOARDING_KEY);
       setHasCompletedOnboarding(onboardingFlag === 'true');
     };
-    AuthService.getCurrentUser().then(u => {
-      setUser(u);
-      setIsLoading(false);
-    });
     initAuth();
+    restoreSession();
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      async (_event, session) => {
+        if (!session) {
+          setUser(null);
+          return;
+        }
+        const profile = await ProfileService.getCurrentProfile();
+        setUser(profile.user);
+      },
+    );
+
+    return () => {
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
-  const login = async (email: string, password?: string) => {
+  const restoreSession = async () => {
     setIsLoading(true);
-    const { user: loggedInUser, error } = await AuthService.login(
-      email,
-      password,
-    );
+    const result = await AuthService.restoreSession();
+    setUser(result.user);
     setIsLoading(false);
-    if (error || !loggedInUser) {
-      return { success: false, error: error || 'Login failed' };
-    }
-    setUser(loggedInUser);
-    return { success: true, error: null };
   };
 
-  const register = async (email: string, password?: string, name?: string) => {
+  const login = async (email: string, password: string) => {
     setIsLoading(true);
-    const { user: registeredUser, error } = await AuthService.register(
-      email,
-      password,
-      name,
-    );
+    const result = await AuthService.login(email, password);
+    setUser(result.user);
     setIsLoading(false);
-    if (error || !registeredUser) {
-      return { success: false, error: error || 'Registration failed' };
-    }
-    setUser(registeredUser);
-    return { success: true, error: null };
+    return {
+      success: !!result.user,
+      error: result.error,
+    };
+  };
+
+  const register = async (email: string, password: string, name?: string) => {
+    setIsLoading(true);
+    const result = await AuthService.register(email, password, name);
+    setUser(result.user);
+    setIsLoading(false);
+    return {
+      success: !!result.user,
+      error: result.error,
+    };
   };
 
   const logout = async () => {
     await AuthService.logout();
     setUser(null);
+  };
+
+  const refreshProfile = async () => {
+    const result = await ProfileService.getCurrentProfile();
+    if (result.user) {
+      setUser(result.user);
+    }
   };
 
   const completeOnboarding = async () => {
@@ -109,35 +137,57 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const updateTravelPreferences = async (prefs: Partial<TravelPreferences>) => {
-    if (!user) return;
-    const updated = await AuthService.updateUserProfile({
-      travelPreferences: { ...user.travelPreferences, ...prefs },
+    if (!user) {
+      return;
+    }
+    const result = await ProfileService.updateProfile(user.id, {
+      travelPreferences: {
+        ...user.travelPreferences,
+        ...prefs,
+      },
     });
-    if (updated) setUser({ ...updated });
+    if (result.user) {
+      setUser(result.user);
+    }
   };
 
   const updateDiningPreferences = async (prefs: Partial<DiningPreferences>) => {
-    if (!user) return;
-    const updated = await AuthService.updateUserProfile({
-      diningPreferences: { ...user.diningPreferences, ...prefs },
+    if (!user) {
+      return;
+    }
+    const result = await ProfileService.updateProfile(user.id, {
+      diningPreferences: {
+        ...user.diningPreferences,
+        ...prefs,
+      },
     });
-    if (updated) setUser({ ...updated });
+    if (result.user) {
+      setUser(result.user);
+    }
   };
 
   const toggleAutoBook = async () => {
-    if (!user) return;
-    const updated = await AuthService.updateUserProfile({
+    if (!user) {
+      return;
+    }
+    const result = await ProfileService.updateProfile(user.id, {
       autoBookEnabled: !user.autoBookEnabled,
     });
-    if (updated) setUser({ ...updated });
+    if (result.user) {
+      setUser(result.user);
+    }
   };
 
   const toggleZeroRetention = async () => {
-    if (!user) return;
-    const updated = await AuthService.updateUserProfile({
+    if (!user) {
+      return;
+    }
+    const result = await ProfileService.updateProfile(user.id, {
       zeroRetentionEnabled: !user.zeroRetentionEnabled,
     });
-    if (updated) setUser({ ...updated });
+    if (result.user) {
+      setUser(result.user);
+    }
   };
 
   const isAuthenticated = !!user;
@@ -158,6 +208,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         login,
         register,
         logout,
+        refreshProfile,
         subscribe,
         updateTravelPreferences,
         updateDiningPreferences,

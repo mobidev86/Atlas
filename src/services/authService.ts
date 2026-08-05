@@ -1,28 +1,33 @@
 import { supabase } from './supabase';
-import { UserProfile } from '../types/UserProfile';
 import { ProfileService } from './profileService';
-import { ProfileRow } from '../types/ProfileRow';
-import { mapProfileRowToUser } from '../mappers/profileMapper';
+
+import { UserProfile } from '../types/UserProfile';
+
+import {
+  DEFAULT_DINING_PREFERENCES,
+  DEFAULT_TRAVEL_PREFERENCES,
+} from '../config/constants';
 
 export class AuthService {
-  private static currentUser: UserProfile | null = null;
-
   /**
-   * Login user with email & password
+   * Login
    */
   static async login(
     email: string,
-    password?: string,
-  ): Promise<{ user: UserProfile | null; error: string | null }> {
+    password: string,
+  ): Promise<{
+    user: UserProfile | null;
+    error: string | null;
+  }> {
     try {
-      if (!email || !email.includes('@')) {
+      if (!email.trim()) {
         return {
           user: null,
-          error: 'Please enter a valid email address.',
+          error: 'Email is required.',
         };
       }
 
-      if (!password) {
+      if (!password.trim()) {
         return {
           user: null,
           error: 'Password is required.',
@@ -30,7 +35,7 @@ export class AuthService {
       }
 
       const { data, error } = await supabase.auth.signInWithPassword({
-        email,
+        email: email.trim().toLowerCase(),
         password,
       });
 
@@ -44,66 +49,55 @@ export class AuthService {
       if (!data.user) {
         return {
           user: null,
-          error: 'Unable to login user.',
+          error: 'Unable to login.',
         };
       }
 
-      // Fetch profile from profiles table
-      const profileResponse = await ProfileService.getProfile(data.user.id);
-
-      if (profileResponse.error) {
-        return {
-          user: null,
-          error: profileResponse.error,
-        };
-      }
-
-      this.currentUser = profileResponse.user;
-
-      return {
-        user: this.currentUser,
-        error: null,
-      };
+      return await ProfileService.getCurrentProfile();
     } catch (error: any) {
       return {
         user: null,
-        error: error.message ?? 'Login failed',
+        error: error?.message ?? 'Login failed.',
       };
     }
   }
 
   /**
-   * Register new user
+   * Register
    */
   static async register(
     email: string,
-    password?: string,
+    password: string,
     fullName?: string,
-  ): Promise<{ user: UserProfile | null; error: string | null }> {
+  ): Promise<{
+    user: UserProfile | null;
+    error: string | null;
+  }> {
     try {
-      if (!email || !email.includes('@')) {
+      if (!email.trim()) {
         return {
           user: null,
-          error: 'Please enter a valid email address.',
+          error: 'Email is required.',
         };
       }
 
-      if (!password || password.length < 6) {
+      if (password.length < 6) {
         return {
           user: null,
-          error: 'Password must be at least 6 characters long.',
+          error: 'Password must be at least 6 characters.',
         };
       }
 
       const { data, error } = await supabase.auth.signUp({
-        email,
+        email: email.trim().toLowerCase(),
         password,
         options: {
           data: {
-            full_name: fullName ?? email.split('@')[0],
+            full_name: fullName ?? '',
           },
         },
       });
+
       if (error) {
         return {
           user: null,
@@ -114,125 +108,178 @@ export class AuthService {
       if (!data.user) {
         return {
           user: null,
-          error: 'Unable to create account.',
+          error: 'Unable to register user.',
         };
       }
-      // Create profile row
-      const profileResponse = await ProfileService.createProfile({
+
+      /**
+       * Email verification enabled
+       *
+       * User exists
+       * Session does not.
+       */
+      if (!data.session) {
+        return {
+          user: null,
+          error:
+            'Verification email sent. Please verify your email before logging in.',
+        };
+      }
+
+      const profile = await ProfileService.createProfile({
         id: data.user.id,
-        email: email,
-        fullName: fullName ?? email.split('@')[0],
+        email: data.user.email!,
+        fullName,
 
         subscriptionStatus: 'none',
 
         autoBookEnabled: false,
+
         zeroRetentionEnabled: true,
 
-        travelPreferences: {
-          seatType: 'aisle',
-          minHotelRating: 4,
-          cabinClass: 'business',
-          preferredAirlines: [],
-        },
+        travelPreferences: DEFAULT_TRAVEL_PREFERENCES,
 
-        diningPreferences: {
-          ambiance: 'quiet',
-          dietaryRestrictions: [],
-          preferredCuisines: [],
-        },
+        diningPreferences: DEFAULT_DINING_PREFERENCES,
 
         nylasAccountStatus: 'disconnected',
       });
-      if (profileResponse.error) {
-        return {
-          user: null,
-          error: profileResponse.error,
-        };
-      }
 
-      this.currentUser = profileResponse.user;
-
-      return {
-        user: this.currentUser,
-        error: null,
-      };
+      return profile;
     } catch (error: any) {
       return {
         user: null,
-        error: error.message ?? 'Registration failed',
+        error: error?.message ?? 'Registration failed.',
       };
     }
   }
 
   /**
-   * Get current logged-in user
+   * Restore session
    */
-  static async getCurrentUser(): Promise<UserProfile | null> {
+  static async restoreSession(): Promise<{
+    user: UserProfile | null;
+    error: string | null;
+  }> {
     try {
       const {
         data: { session },
       } = await supabase.auth.getSession();
 
-      if (!session?.user) {
-        this.currentUser = null;
-        return null;
+      if (!session) {
+        return {
+          user: null,
+          error: null,
+        };
       }
 
-      if (!this.currentUser) {
-        const profileResponse = await ProfileService.getProfile(
-          session.user.id,
-        );
-
-        this.currentUser = profileResponse.user;
-      }
-
-      return this.currentUser;
-    } catch (error) {
-      return null;
+      return await ProfileService.getCurrentProfile();
+    } catch (error: any) {
+      return {
+        user: null,
+        error: error?.message ?? 'Unable to restore session.',
+      };
     }
+  }
+
+  /**
+   * Current logged in user
+   */
+  static async getCurrentUser(): Promise<{
+    user: UserProfile | null;
+    error: string | null;
+  }> {
+    return this.restoreSession();
   }
 
   /**
    * Logout
    */
-  static async logout(): Promise<void> {
-    await supabase.auth.signOut();
-    this.currentUser = null;
+  static async logout(): Promise<{
+    success: boolean;
+    error: string | null;
+  }> {
+    try {
+      const { error } = await supabase.auth.signOut();
+
+      if (error) {
+        return {
+          success: false,
+          error: error.message,
+        };
+      }
+
+      return {
+        success: true,
+        error: null,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error?.message ?? 'Unable to logout.',
+      };
+    }
   }
 
   /**
-   * Update local user cache
+   * Send password reset email
    */
-  static async updateUserProfile(
-    updates: Partial<UserProfile>,
-  ): Promise<UserProfile | null> {
-    if (!this.currentUser) {
-      return null;
+  static async resetPassword(email: string): Promise<{
+    success: boolean;
+    error: string | null;
+  }> {
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(
+        email.trim().toLowerCase(),
+      );
+
+      if (error) {
+        return {
+          success: false,
+          error: error.message,
+        };
+      }
+
+      return {
+        success: true,
+        error: null,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error?.message ?? 'Unable to send reset password email.',
+      };
     }
+  }
 
-    const { data, error } = await supabase
-      .from('profiles')
-      .update({
-        subscription_status: updates.subscriptionStatus ?? undefined,
-        subscription_tier: updates.subscriptionTier ?? undefined,
-        full_name: updates.fullName ?? undefined,
-        auto_book_enabled: updates.autoBookEnabled ?? undefined,
-        zero_retention_enabled: updates.zeroRetentionEnabled ?? undefined,
-        travel_preferences: updates.travelPreferences ?? undefined,
-        dining_preferences: updates.diningPreferences ?? undefined,
-        nylas_grant_id: updates.nylasGrantId ?? undefined,
-        nylas_account_status: updates.nylasAccountStatus ?? undefined,
-      })
-      .eq('id', this.currentUser.id)
-      .select()
-      .single();
+  /**
+   * Resend verification email
+   */
+  static async resendVerificationEmail(email: string): Promise<{
+    success: boolean;
+    error: string | null;
+  }> {
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: email.trim().toLowerCase(),
+      });
 
-    if (error) {
-      console.log('updateUserProfile error:', error.message);
-      return null;
+      if (error) {
+        return {
+          success: false,
+          error: error.message,
+        };
+      }
+
+      return {
+        success: true,
+        error: null,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error?.message ?? 'Unable to resend verification email.',
+      };
     }
-
-    this.currentUser = mapProfileRowToUser(data as ProfileRow);
-    return this.currentUser;
   }
 }

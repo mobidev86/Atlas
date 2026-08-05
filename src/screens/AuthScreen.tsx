@@ -34,7 +34,6 @@ export function AuthScreen({
     setErrorMessage(null);
     if (authMode === 'login') {
       const { success, error } = await login(email, password);
-      console.log('Login result:', { success, error }); // Debugging log
       if (success) {
         onSubmit(true);
       } else {

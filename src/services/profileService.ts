@@ -1,12 +1,13 @@
+import { supabase } from './supabase';
+
 import { ProfileRow } from '../types/ProfileRow';
 import { UserProfile } from '../types/UserProfile';
 
 import { mapProfileRowToUser } from '../mappers/profileMapper';
-import { supabase } from './supabase';
 
 export class ProfileService {
   /**
-   * Get user profile
+   * Get profile by user id
    */
   static async getProfile(userId: string): Promise<{
     user: UserProfile | null;
@@ -17,12 +18,19 @@ export class ProfileService {
         .from('profiles')
         .select('*')
         .eq('id', userId)
-        .single();
+        .maybeSingle();
 
       if (error) {
         return {
           user: null,
           error: error.message,
+        };
+      }
+
+      if (!data) {
+        return {
+          user: null,
+          error: 'Profile not found.',
         };
       }
 
@@ -33,7 +41,43 @@ export class ProfileService {
     } catch (error: any) {
       return {
         user: null,
-        error: error.message ?? 'Unable to fetch profile',
+        error: error?.message ?? 'Unable to fetch profile.',
+      };
+    }
+  }
+
+  /**
+   * Get currently logged in user's profile
+   */
+  static async getCurrentProfile(): Promise<{
+    user: UserProfile | null;
+    error: string | null;
+  }> {
+    try {
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
+
+      if (error) {
+        return {
+          user: null,
+          error: error.message,
+        };
+      }
+
+      if (!user) {
+        return {
+          user: null,
+          error: 'User is not authenticated.',
+        };
+      }
+
+      return await this.getProfile(user.id);
+    } catch (error: any) {
+      return {
+        user: null,
+        error: error?.message ?? 'Unable to fetch current profile.',
       };
     }
   }
@@ -46,25 +90,26 @@ export class ProfileService {
     error: string | null;
   }> {
     try {
+      const payload: Partial<ProfileRow> = {
+        id: profile.id,
+        email: profile.email,
+        full_name: profile.fullName ?? null,
+        stripe_customer_id: profile.stripeCustomerId ?? null,
+        subscription_status: profile.subscriptionStatus ?? 'none',
+        subscription_tier: profile.subscriptionTier ?? null,
+        auto_book_enabled: profile.autoBookEnabled ?? false,
+        zero_retention_enabled: profile.zeroRetentionEnabled ?? true,
+        travel_preferences: profile.travelPreferences ?? null,
+        dining_preferences: profile.diningPreferences ?? null,
+        nylas_grant_id: profile.nylasGrantId ?? null,
+        nylas_account_status: profile.nylasAccountStatus ?? 'disconnected',
+      };
+
       const { data, error } = await supabase
         .from('profiles')
-        .upsert(
-          {
-            id: profile.id,
-            email: profile.email,
-            full_name: profile.fullName ?? null,
-            stripe_customer_id: profile.stripeCustomerId ?? null,
-            subscription_status: profile.subscriptionStatus ?? 'none',
-            subscription_tier: profile.subscriptionTier ?? null,
-            auto_book_enabled: profile.autoBookEnabled ?? false,
-            zero_retention_enabled: profile.zeroRetentionEnabled ?? true,
-            travel_preferences: profile.travelPreferences ?? {},
-            dining_preferences: profile.diningPreferences ?? {},
-            nylas_grant_id: profile.nylasGrantId ?? null,
-            nylas_account_status: profile.nylasAccountStatus ?? 'disconnected',
-          },
-          { onConflict: 'id' }, // if id already exists, update instead of erroring
-        )
+        .upsert(payload, {
+          onConflict: 'id',
+        })
         .select()
         .single();
 
@@ -82,7 +127,7 @@ export class ProfileService {
     } catch (error: any) {
       return {
         user: null,
-        error: error.message ?? 'Unable to create profile',
+        error: error?.message ?? 'Unable to create profile.',
       };
     }
   }
@@ -98,22 +143,47 @@ export class ProfileService {
     error: string | null;
   }> {
     try {
-      const updateData: any = {};
+      const updateData: Partial<ProfileRow> = {};
 
-      if (updates.fullName !== undefined)
+      if (updates.fullName !== undefined) {
         updateData.full_name = updates.fullName;
+      }
 
-      if (updates.autoBookEnabled !== undefined)
+      if (updates.subscriptionStatus !== undefined) {
+        updateData.subscription_status = updates.subscriptionStatus;
+      }
+
+      if (updates.subscriptionTier !== undefined) {
+        updateData.subscription_tier = updates.subscriptionTier;
+      }
+
+      if (updates.stripeCustomerId !== undefined) {
+        updateData.stripe_customer_id = updates.stripeCustomerId;
+      }
+
+      if (updates.autoBookEnabled !== undefined) {
         updateData.auto_book_enabled = updates.autoBookEnabled;
+      }
 
-      if (updates.zeroRetentionEnabled !== undefined)
+      if (updates.zeroRetentionEnabled !== undefined) {
         updateData.zero_retention_enabled = updates.zeroRetentionEnabled;
+      }
 
-      if (updates.travelPreferences !== undefined)
+      if (updates.travelPreferences !== undefined) {
         updateData.travel_preferences = updates.travelPreferences;
+      }
 
-      if (updates.diningPreferences !== undefined)
+      if (updates.diningPreferences !== undefined) {
         updateData.dining_preferences = updates.diningPreferences;
+      }
+
+      if (updates.nylasGrantId !== undefined) {
+        updateData.nylas_grant_id = updates.nylasGrantId;
+      }
+
+      if (updates.nylasAccountStatus !== undefined) {
+        updateData.nylas_account_status = updates.nylasAccountStatus;
+      }
 
       const { data, error } = await supabase
         .from('profiles')
@@ -136,7 +206,7 @@ export class ProfileService {
     } catch (error: any) {
       return {
         user: null,
-        error: error.message ?? 'Unable to update profile',
+        error: error?.message ?? 'Unable to update profile.',
       };
     }
   }
@@ -168,7 +238,7 @@ export class ProfileService {
     } catch (error: any) {
       return {
         success: false,
-        error: error.message ?? 'Unable to delete profile',
+        error: error?.message ?? 'Unable to delete profile.',
       };
     }
   }

@@ -3,7 +3,11 @@ type ConnectionListener = (isConnected: boolean) => void;
 export class OfflineService {
   private static isConnected: boolean = true;
   private static listeners: Set<ConnectionListener> = new Set();
-  private static pendingQueue: Array<{ id: string; action: string; payload: any }> = [];
+  private static pendingQueue: Array<{
+    id: string;
+    action: string;
+    payload: any;
+  }> = [];
 
   /**
    * Register listener for network status changes
@@ -45,7 +49,6 @@ export class OfflineService {
    * Flush queued actions once reconnected
    */
   private static flushQueue(): void {
-    console.log(`Flushing ${this.pendingQueue.length} queued offline actions...`);
     this.pendingQueue = [];
   }
 }
