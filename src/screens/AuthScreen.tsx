@@ -5,7 +5,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Text,
-  Alert,
 } from 'react-native';
 import styles from '../styles/styles';
 import { InputField, PrimaryButton, LinkText } from '../components';
@@ -15,14 +14,9 @@ import { useAuth } from '../context/AuthContext';
 interface AuthScreenProps {
   authMode: AuthMode;
   onSwitchMode: () => void;
-  onSubmit: (success: boolean) => void;
 }
 
-export function AuthScreen({
-  authMode,
-  onSwitchMode,
-  onSubmit,
-}: AuthScreenProps) {
+export function AuthScreen({ authMode, onSwitchMode }: AuthScreenProps) {
   const { login, register } = useAuth();
   const [focusedInput, setFocusedInput] = useState<string | null>(null);
   const [email, setEmail] = useState('');
@@ -34,16 +28,12 @@ export function AuthScreen({
     setErrorMessage(null);
     if (authMode === 'login') {
       const { success, error } = await login(email, password);
-      if (success) {
-        onSubmit(true);
-      } else {
+      if (!success) {
         setErrorMessage(error || 'Login failed.');
       }
     } else {
       const { success, error } = await register(email, password, fullName);
-      if (success) {
-        onSubmit(true);
-      } else {
+      if (!success) {
         setErrorMessage(error || 'Registration failed.');
       }
     }

@@ -164,9 +164,6 @@ export class ProfileService {
         id: profile.id,
         email: profile.email,
         full_name: profile.fullName ?? null,
-        stripe_customer_id: profile.stripeCustomerId ?? null,
-        subscription_status: profile.subscriptionStatus ?? 'none',
-        subscription_tier: profile.subscriptionTier ?? null,
         auto_book_enabled: profile.autoBookEnabled ?? false,
         zero_retention_enabled: profile.zeroRetentionEnabled ?? true,
         travel_preferences: profile.travelPreferences ?? null,
@@ -217,18 +214,6 @@ export class ProfileService {
 
       if (updates.fullName !== undefined) {
         updateData.full_name = updates.fullName;
-      }
-
-      if (updates.subscriptionStatus !== undefined) {
-        updateData.subscription_status = updates.subscriptionStatus;
-      }
-
-      if (updates.subscriptionTier !== undefined) {
-        updateData.subscription_tier = updates.subscriptionTier;
-      }
-
-      if (updates.stripeCustomerId !== undefined) {
-        updateData.stripe_customer_id = updates.stripeCustomerId;
       }
 
       if (updates.autoBookEnabled !== undefined) {

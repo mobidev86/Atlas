@@ -1,72 +1,187 @@
-import { UserProfile } from '../types/UserProfile';
+import { supabase } from './supabase';
 import { AuthService } from './authService';
-import { ProfileService } from './profileService';
+import { Subscription } from '../types/Subscription';
+import { mapSubscriptionRowToSubscription } from '../mappers/subscriptionMapper';
 
 export class SubscriptionService {
   /**
-   * Verify if the user has an active subscription to access features
+   * Get current user subscription
    */
-  static async checkSubscription(): Promise<boolean> {
-    const { user } = await AuthService.getCurrentUser();
-    if (!user) return false;
-    return (
-      user.subscriptionStatus === 'active' ||
-      user.subscriptionStatus === 'trialing'
-    );
-  }
-
-  /**
-   * Process subscription activation (Stripe flow integration)
-   */
-  static async subscribeUser(
-    planTier: 'executive' | 'standard' = 'executive',
-  ): Promise<{
-    success: boolean;
-    user: UserProfile | null;
+  static async getCurrentSubscription(): Promise<{
+    subscription: Subscription | null;
     error: string | null;
   }> {
     try {
       const { user } = await AuthService.getCurrentUser();
+
       if (!user) {
         return {
-          success: false,
-          user: null,
+          subscription: null,
           error: 'User not authenticated.',
         };
       }
 
-      const { user: updatedUser, error } = await ProfileService.updateProfile(
-        user.id,
-        {
-          subscriptionStatus: 'active',
-          subscriptionTier: planTier,
-        },
+      const { data, error } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('user_id', user.id)
+        .in('status', ['active', 'trialing'])
+        .order('created_at', {
+          ascending: false,
+        })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) {
+        return {
+          subscription: null,
+          error: error.message,
+        };
+      }
+
+      return {
+        subscription: data ? mapSubscriptionRowToSubscription(data) : null,
+        error: null,
+      };
+    } catch (err: any) {
+      return {
+        subscription: null,
+        error: err.message || 'Unable to fetch subscription.',
+      };
+    }
+  }
+
+  /**
+   * Check if user has active subscription
+   */
+  static async checkSubscription(): Promise<boolean> {
+    const { subscription } = await this.getCurrentSubscription();
+
+    if (!subscription) {
+      return false;
+    }
+
+    return (
+      subscription.status === 'active' || subscription.status === 'trialing'
+    );
+  }
+
+  /**
+   * Create Stripe customer
+   *
+   * Calls:
+   * supabase/functions/create-stripe-customer
+   */
+  static async createStripeCustomer(): Promise<{
+    success: boolean;
+    customerId: string | null;
+    error: string | null;
+  }> {
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        'create-stripe-customer',
       );
 
-      if (!updatedUser) {
+      if (error) {
         return {
           success: false,
-          user: null,
-          error: error || 'Unable to update subscription.',
+          customerId: null,
+          error: error.message,
         };
       }
 
       return {
         success: true,
-        user: updatedUser,
+
+        customerId: data.customerId,
+
         error: null,
       };
     } catch (err: any) {
       return {
         success: false,
-        user: null,
-        error: err.message || 'Subscription failed. Please try again.',
+
+        customerId: null,
+
+        error: err.message || 'Unable to create Stripe customer',
+      };
+    }
+  }
+
+  /**
+   * Start subscription flow
+   *
+   * Android:
+   * Stripe Billing
+   *
+   * iOS:
+   * Apple IAP (later)
+   */
+  static async subscribeUser(
+    planTier: 'executive' | 'standard' = 'executive',
+  ): Promise<{
+    success: boolean;
+    customerId: string | null;
+    error: string | null;
+  }> {
+    try {
+      const { user } = await AuthService.getCurrentUser();
+
+      if (!user) {
+        return {
+          success: false,
+          customerId: null,
+          error: 'User not authenticated.',
+        };
+      }
+
+      /**
+       * Step 1:
+       * Create Stripe customer
+       *
+       * Step 2:
+       * Create subscription
+       *
+       * Step 3:
+       * Open Payment Sheet
+       *
+       * Step 4:
+       * Webhook updates subscriptions table
+       */
+
+      const customerResult = await this.createStripeCustomer();
+
+      if (!customerResult.success) {
+        return {
+          success: false,
+          customerId: null,
+          error: customerResult.error,
+        };
+      }
+
+      return {
+        success: true,
+
+        customerId: customerResult.customerId,
+
+        error: null,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+
+        customerId: null,
+
+        error: err.message || 'Subscription failed.',
       };
     }
   }
 
   /**
    * Cancel subscription
+   *
+   * TODO:
+   * Call cancel-subscription Edge Function
    */
   static async cancelSubscription(): Promise<{
     success: boolean;
@@ -74,14 +189,23 @@ export class SubscriptionService {
   }> {
     try {
       const { user } = await AuthService.getCurrentUser();
+
       if (!user) {
-        return { success: false, error: 'User not authenticated.' };
+        return {
+          success: false,
+          error: 'User not authenticated.',
+        };
       }
 
-      await ProfileService.updateProfile(user.id, {
-        subscriptionStatus: 'canceled',
-      });
-      return { success: true, error: null };
+      // Later:
+      // supabase.functions.invoke(
+      //   'cancel-subscription'
+      // )
+
+      return {
+        success: true,
+        error: null,
+      };
     } catch (err: any) {
       return {
         success: false,

@@ -7,9 +7,6 @@ export const mapProfileRowToUser = (row: ProfileRow): UserProfile => {
     id: row.id,
     email: row.email,
     fullName: row.full_name ?? undefined,
-    stripeCustomerId: row.stripe_customer_id ?? undefined,
-    subscriptionStatus: row.subscription_status ?? 'none',
-    subscriptionTier: row.subscription_tier ?? undefined,
     autoBookEnabled: row.auto_book_enabled ?? false,
     zeroRetentionEnabled: row.zero_retention_enabled ?? true,
     travelPreferences: row.travel_preferences ?? {

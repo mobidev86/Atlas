@@ -1,13 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import {
+  NavigationContainer,
+  createNavigationContainerRef,
+  CommonActions,
+} from '@react-navigation/native';
 import {
   createNativeStackNavigator,
   NativeStackScreenProps,
 } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
 import { AuthMode } from '../types';
-import { useAuth } from '../context/AuthContext';
+import { useAuth, AuthRouteState } from '../context/AuthContext';
 import { MainTabNavigator } from './MainTabNavigator';
 import { MainLayout } from '../components/MainLayout';
 import styles from '../styles/styles';
@@ -21,6 +25,7 @@ import {
 } from '../screens';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 type SplashScreenProps = NativeStackScreenProps<RootStackParamList, 'Splash'>;
 type AuthScreenWrapperProps = NativeStackScreenProps<
@@ -50,11 +55,9 @@ function SplashScreenContainer({ navigation }: SplashScreenProps) {
     <SplashScreen
       onStart={async () => {
         await completeOnboarding();
-        navigation.navigate('Auth', { initialMode: 'login' });
       }}
       onSkip={async () => {
         await completeOnboarding();
-        navigation.navigate('MainTabs');
       }}
     />
   );
@@ -71,26 +74,22 @@ function AuthScreenContainer({ route, navigation }: AuthScreenWrapperProps) {
       onSwitchMode={() => {
         setAuthMode(prev => (prev === 'login' ? 'register' : 'login'));
       }}
-      onSubmit={(success: boolean) => {
-        if (success) {
-          if (authMode === 'register') {
-            navigation.navigate('Subscribe');
-          } else {
-            navigation.navigate('MainTabs');
-          }
-        }
-      }}
     />
   );
 }
 
-function SubscribeScreenContainer({
-  navigation,
-}: SubscribeScreenWrapperProps) {
+function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
+  const { logout } = useAuth();
   return (
     <SubscribeScreen
       onSubscribe={() => navigation.navigate('Onboard')}
-      onBack={() => navigation.navigate('Auth', { initialMode: 'login' })}
+      onBack={async () => {
+        await logout();
+        // Don't manually navigate here — logout() flips authRouteState to
+        // 'auth', and AppNavigator's ref-based reset picks that up and
+        // shows the Auth screen on its own. Manual navigate() would fight
+        // with that and leave a stale session behind.
+      }}
     />
   );
 }
@@ -100,10 +99,7 @@ function OnboardScreenContainer({ navigation }: OnboardScreenWrapperProps) {
   return (
     <OnboardScreen
       onContinue={async () => {
-        const { success } = await subscribe();
-        if (success) {
-          navigation.navigate('MainTabs');
-        }
+        await subscribe();
       }}
     />
   );
@@ -139,89 +135,113 @@ function ConfirmScreenContainer({
   );
 }
 
+function LoadingScreen() {
+  return (
+    <View style={navStyles.initialLoadingContainer}>
+      <View style={styles.brandBadgeLarge}>
+        <Text style={styles.brandBadgeText}>A</Text>
+      </View>
+      <Text style={styles.brandTitle}>Atlas</Text>
+      <ActivityIndicator
+        size="large"
+        color="#233A5E"
+        style={{ marginTop: 24 }}
+      />
+    </View>
+  );
+}
+
+type ResolvedRouteState = Exclude<AuthRouteState, 'loading'>;
+
+function routeStateToScreen(
+  state: ResolvedRouteState,
+): keyof RootStackParamList {
+  switch (state) {
+    case 'onboarding':
+      return 'Splash';
+    case 'auth':
+      return 'Auth';
+    case 'home':
+      return 'MainTabs';
+    case 'subscription':
+      return 'Subscribe';
+  }
+}
+
 export function AppNavigator() {
-  const { user, isLoading, isInitialLoading, hasCompletedOnboarding, isSubscribed } =
-    useAuth();
+  const { authRouteState, isLoading, isInitialLoading } = useAuth();
+
+  // null = nothing applied yet. Only ever set when we've either dispatched
+  // a reset for this route, or confirmed the navigator already mounted on it.
+  const appliedRouteStateRef = useRef<ResolvedRouteState | null>(null);
+  const [isNavReady, setIsNavReady] = useState(false);
+
+  const initialRoute = routeStateToScreen(
+    authRouteState === 'loading' ? 'auth' : authRouteState,
+  );
+
+  useEffect(() => {
+    if (authRouteState === 'loading') return;
+    if (!isNavReady || !navigationRef.isReady()) return;
+    if (appliedRouteStateRef.current === authRouteState) return; // already applied, skip
+
+    const targetScreen = routeStateToScreen(authRouteState);
+
+    // If this is the very first time we're applying anything, and the
+    // navigator already mounted on the correct screen via initialRouteName,
+    // just record it — no need to dispatch a reset and cause a redundant
+    // transition/double-render.
+    if (
+      appliedRouteStateRef.current === null &&
+      targetScreen === initialRoute
+    ) {
+      appliedRouteStateRef.current = authRouteState;
+      return;
+    }
+
+    appliedRouteStateRef.current = authRouteState;
+    navigationRef.dispatch(
+      CommonActions.reset({
+        index: 0,
+        routes: [{ name: targetScreen }],
+      }),
+    );
+  }, [authRouteState, isNavReady, initialRoute]);
 
   if (isInitialLoading) {
-    return (
-      <View style={navStyles.initialLoadingContainer}>
-        <View style={styles.brandBadgeLarge}>
-          <Text style={styles.brandBadgeText}>A</Text>
-        </View>
-        <Text style={styles.brandTitle}>Atlas</Text>
-        <ActivityIndicator
-          size="large"
-          color="#233A5E"
-          style={{ marginTop: 24 }}
-        />
-      </View>
-    );
+    return <LoadingScreen />;
   }
+
+  const showOverlay = isLoading || authRouteState === 'loading';
+
+  console.log(
+    'AppNavigator authRouteState:',
+    authRouteState,
+    'initialRoute:',
+    initialRoute,
+  );
 
   return (
     <View style={navStyles.container}>
-      <NavigationContainer>
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-          {user ? (
-            !isSubscribed ? (
-              <>
-                <Stack.Screen
-                  name="Subscribe"
-                  component={SubscribeScreenContainer}
-                />
-                <Stack.Screen
-                  name="Onboard"
-                  component={OnboardScreenContainer}
-                />
-                <Stack.Screen name="Auth" component={AuthScreenContainer} />
-                <Stack.Screen name="MainTabs" component={MainTabNavigator} />
-              </>
-            ) : (
-              <>
-                <Stack.Screen name="MainTabs" component={MainTabNavigator} />
-                <Stack.Screen name="Reply" component={ReplyScreenContainer} />
-                <Stack.Screen
-                  name="Confirm"
-                  component={ConfirmScreenContainer}
-                />
-                <Stack.Screen
-                  name="Subscribe"
-                  component={SubscribeScreenContainer}
-                />
-                <Stack.Screen
-                  name="Onboard"
-                  component={OnboardScreenContainer}
-                />
-                <Stack.Screen name="Auth" component={AuthScreenContainer} />
-              </>
-            )
-          ) : !hasCompletedOnboarding ? (
-            <>
-              <Stack.Screen name="Splash" component={SplashScreenContainer} />
-              <Stack.Screen name="Auth" component={AuthScreenContainer} />
-              <Stack.Screen
-                name="Subscribe"
-                component={SubscribeScreenContainer}
-              />
-              <Stack.Screen name="Onboard" component={OnboardScreenContainer} />
-              <Stack.Screen name="MainTabs" component={MainTabNavigator} />
-            </>
-          ) : (
-            <>
-              <Stack.Screen name="Auth" component={AuthScreenContainer} />
-              <Stack.Screen
-                name="Subscribe"
-                component={SubscribeScreenContainer}
-              />
-              <Stack.Screen name="Onboard" component={OnboardScreenContainer} />
-              <Stack.Screen name="MainTabs" component={MainTabNavigator} />
-            </>
-          )}
+      <NavigationContainer
+        ref={navigationRef}
+        onReady={() => setIsNavReady(true)}
+      >
+        <Stack.Navigator
+          screenOptions={{ headerShown: false }}
+          initialRouteName={initialRoute}
+        >
+          <Stack.Screen name="Splash" component={SplashScreenContainer} />
+          <Stack.Screen name="Auth" component={AuthScreenContainer} />
+          <Stack.Screen name="Subscribe" component={SubscribeScreenContainer} />
+          <Stack.Screen name="Onboard" component={OnboardScreenContainer} />
+          <Stack.Screen name="MainTabs" component={MainTabNavigator} />
+          <Stack.Screen name="Reply" component={ReplyScreenContainer} />
+          <Stack.Screen name="Confirm" component={ConfirmScreenContainer} />
         </Stack.Navigator>
       </NavigationContainer>
 
-      {isLoading && (
+      {showOverlay && (
         <View style={navStyles.overlay}>
           <View style={navStyles.spinnerCard}>
             <ActivityIndicator size="large" color="#233A5E" />

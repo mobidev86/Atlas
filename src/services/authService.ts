@@ -130,17 +130,10 @@ export class AuthService {
         id: data.user.id,
         email: data.user.email!,
         fullName,
-
-        subscriptionStatus: 'none',
-
         autoBookEnabled: false,
-
         zeroRetentionEnabled: true,
-
         travelPreferences: DEFAULT_TRAVEL_PREFERENCES,
-
         diningPreferences: DEFAULT_DINING_PREFERENCES,
-
         nylasAccountStatus: 'disconnected',
       });
 
