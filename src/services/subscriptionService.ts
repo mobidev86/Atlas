@@ -2,6 +2,8 @@ import { supabase } from './supabase';
 import { AuthService } from './authService';
 import { Subscription } from '../types/Subscription';
 import { mapSubscriptionRowToSubscription } from '../mappers/subscriptionMapper';
+import { Platform } from 'react-native';
+import { extractEdgeFunctionErrorMessage } from '../utils/edgeFunctionError';
 
 export class SubscriptionService {
   /**
@@ -31,6 +33,8 @@ export class SubscriptionService {
         })
         .limit(1)
         .maybeSingle();
+
+      console.log('getCurrentSubscription data:', data, 'error:', error);
 
       if (error) {
         return {
@@ -86,23 +90,22 @@ export class SubscriptionService {
         return {
           success: false,
           customerId: null,
-          error: error.message,
+          error: await extractEdgeFunctionErrorMessage(
+            error,
+            'Unable to create Stripe customer.',
+          ),
         };
       }
 
       return {
         success: true,
-
         customerId: data.customerId,
-
         error: null,
       };
     } catch (err: any) {
       return {
         success: false,
-
         customerId: null,
-
         error: err.message || 'Unable to create Stripe customer',
       };
     }
@@ -177,39 +180,153 @@ export class SubscriptionService {
     }
   }
 
+  static async createTrialSetup(tier: 'standard' | 'executive'): Promise<{
+    setupIntentClientSecret: string | null;
+    ephemeralKeySecret: string | null;
+    customerId: string | null;
+    error: string | null;
+  }> {
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        'create-trial-setup',
+        {
+          body: { tier, platform: Platform.OS },
+        },
+      );
+
+      if (error) {
+        return {
+          setupIntentClientSecret: null,
+          ephemeralKeySecret: null,
+          customerId: null,
+          error: await extractEdgeFunctionErrorMessage(
+            error,
+            'Unable to start subscription setup.',
+          ),
+        };
+      }
+
+      return {
+        setupIntentClientSecret: data.setupIntentClientSecret,
+        ephemeralKeySecret: data.ephemeralKeySecret,
+        customerId: data.customerId,
+        error: null,
+      };
+    } catch (err: any) {
+      return {
+        setupIntentClientSecret: null,
+        ephemeralKeySecret: null,
+        customerId: null,
+        error: err.message ?? 'Unable to start subscription setup.',
+      };
+    }
+  }
+
+  static async confirmTrialSubscription(setupIntentId: string): Promise<{
+    success: boolean;
+    error: string | null;
+  }> {
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        'confirm-trial-subscription',
+        {
+          body: { setupIntentId },
+        },
+      );
+
+      if (error) {
+        return {
+          success: false,
+          error: await extractEdgeFunctionErrorMessage(
+            error,
+            'Unable to confirm subscription.',
+          ),
+        };
+      }
+
+      return { success: true, error: null };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message ?? 'Unable to confirm subscription.',
+      };
+    }
+  }
+
+  // SubscriptionService
+  static async getTrialEligibility(): Promise<{
+    isEligible: boolean;
+    error: string | null;
+  }> {
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        return { isEligible: false, error: 'Not authenticated.' };
+      }
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('has_used_trial')
+        .eq('id', user.id)
+        .single();
+
+      if (error) {
+        return { isEligible: false, error: error.message };
+      }
+
+      return { isEligible: !data.has_used_trial, error: null };
+    } catch (err: any) {
+      return {
+        isEligible: false,
+        error: err.message ?? 'Unable to check trial eligibility.',
+      };
+    }
+  }
+
   /**
    * Cancel subscription
    *
    * TODO:
    * Call cancel-subscription Edge Function
    */
+  // SubscriptionService
   static async cancelSubscription(): Promise<{
     success: boolean;
+    cancelAtPeriodEnd: boolean;
+    currentPeriodEnd: string | null;
     error: string | null;
   }> {
     try {
-      const { user } = await AuthService.getCurrentUser();
+      const { data, error } = await supabase.functions.invoke(
+        'cancel-subscription',
+      );
 
-      if (!user) {
+      if (error) {
         return {
           success: false,
-          error: 'User not authenticated.',
+          cancelAtPeriodEnd: false,
+          currentPeriodEnd: null,
+          error: await extractEdgeFunctionErrorMessage(
+            error,
+            'Unable to cancel subscription.',
+          ),
         };
       }
 
-      // Later:
-      // supabase.functions.invoke(
-      //   'cancel-subscription'
-      // )
-
       return {
         success: true,
+        cancelAtPeriodEnd: data.cancelAtPeriodEnd,
+        currentPeriodEnd: data.currentPeriodEnd,
         error: null,
       };
     } catch (err: any) {
       return {
         success: false,
-        error: err.message || 'Failed to cancel subscription',
+        cancelAtPeriodEnd: false,
+        currentPeriodEnd: null,
+        error: err.message ?? 'Unable to cancel subscription.',
       };
     }
   }

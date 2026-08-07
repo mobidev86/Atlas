@@ -6,10 +6,8 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2024-06-20',
 });
 
-const TRIAL_DAYS = 7;
-
 export default {
-  fetch: withSupabase({ auth: ['publishable'] }, async (req, ctx) => {
+  fetch: withSupabase({ auth: 'user' }, async (req, ctx) => {
     try {
       const {
         data: { user },
@@ -33,6 +31,7 @@ export default {
         );
       }
 
+      // setupIntent is defined here
       const setupIntent = await stripe.setupIntents.retrieve(setupIntentId);
 
       if (setupIntent.status !== 'succeeded') {
@@ -44,8 +43,6 @@ export default {
         );
       }
 
-      // Safety check: make sure this SetupIntent actually belongs to
-      // this user, not someone replaying another user's ID
       if (setupIntent.metadata?.supabase_user_id !== user.id) {
         return Response.json(
           { error: 'SetupIntent mismatch' },
@@ -60,6 +57,9 @@ export default {
       const customerId = setupIntent.customer as string;
       const paymentMethodId = setupIntent.payment_method as string;
 
+      // trialDays goes HERE — after setupIntent exists, not at the top of the file
+      const trialDays = Number(setupIntent.metadata?.trial_days ?? 7);
+
       if (!priceId) {
         return Response.json(
           { error: 'Missing price_id on SetupIntent' },
@@ -67,40 +67,70 @@ export default {
         );
       }
 
-      // Set the newly saved card as this customer's default payment method
       await stripe.customers.update(customerId, {
         invoice_settings: { default_payment_method: paymentMethodId },
       });
 
-      // Guard against double-submission creating two subscriptions
-      const { data: existing } = await ctx.supabase
-        .from('subscriptions')
-        .select('id')
-        .eq('user_id', user.id)
-        .in('status', ['active', 'trialing'])
-        .maybeSingle();
+      const { data: activeOrTrialing, error: subError } =
+        await ctx.supabaseAdmin
+          .from('subscriptions')
+          .select('id')
+          .eq('user_id', user.id)
+          .in('status', ['active', 'trialing'])
+          .maybeSingle();
 
-      if (existing) {
+      if (subError) throw subError;
+
+      if (activeOrTrialing) {
         return Response.json(
           { error: 'You already have an active subscription.' },
           { status: 409 },
         );
       }
 
-      // Create the actual subscription with a 7-day trial.
-      // Nothing is charged now — Stripe will attempt the first charge
-      // automatically when the trial ends. Your webhook function is
-      // what keeps the `subscriptions` table in sync with this.
       const subscription = await stripe.subscriptions.create({
         customer: customerId,
         items: [{ price: priceId }],
-        trial_period_days: TRIAL_DAYS,
+        trial_period_days: trialDays,
         default_payment_method: paymentMethodId,
         metadata: {
           supabase_user_id: user.id,
           tier,
         },
       });
+
+      const currentPeriodStart = subscription.current_period_start
+        ? new Date(subscription.current_period_start * 1000).toISOString()
+        : new Date().toISOString();
+      const currentPeriodEnd = subscription.current_period_end
+        ? new Date(subscription.current_period_end * 1000).toISOString()
+        : null;
+      const trialEnd = subscription.trial_end
+        ? new Date(subscription.trial_end * 1000).toISOString()
+        : null;
+
+      const { error: upsertError } = await ctx.supabaseAdmin
+        .from('subscriptions')
+        .upsert(
+          {
+            user_id: user.id,
+            provider: 'stripe',
+            stripe_subscription_id: subscription.id,
+            price_id: priceId,
+            tier,
+            status: subscription.status,
+            current_period_start: currentPeriodStart,
+            current_period_end: currentPeriodEnd,
+            cancel_at_period_end: subscription.cancel_at_period_end ?? false,
+            trial_end: trialEnd,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'stripe_subscription_id' },
+        );
+
+      if (upsertError) {
+        console.error('Failed to write subscriptions row:', upsertError);
+      }
 
       return Response.json({
         subscriptionId: subscription.id,

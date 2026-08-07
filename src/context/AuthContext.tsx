@@ -191,6 +191,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     setUser(result.user);
     if (result.user) {
       // Pass the resolved user directly to avoid stale closure in refreshSubscription
+      await SubscriptionService.createStripeCustomer();
       await refreshSubscription(result.user);
     } else {
       setSubscriptionChecked(true);

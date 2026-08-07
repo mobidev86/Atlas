@@ -179,6 +179,7 @@ interface PrimaryButtonProps {
   onPress: () => void;
   fullWidth?: boolean;
   large?: boolean;
+  disabled?: boolean;
 }
 
 export function PrimaryButton({
@@ -186,6 +187,7 @@ export function PrimaryButton({
   onPress,
   fullWidth = false,
   large = false,
+  disabled = false,
 }: PrimaryButtonProps) {
   const buttonStyle = fullWidth
     ? styles.primaryButtonFull
@@ -194,7 +196,7 @@ export function PrimaryButton({
     : styles.primaryButton;
 
   return (
-    <Pressable style={buttonStyle} onPress={onPress}>
+    <Pressable style={buttonStyle} onPress={onPress} disabled={disabled}>
       <Text style={styles.primaryButtonText}>{text}</Text>
     </Pressable>
   );

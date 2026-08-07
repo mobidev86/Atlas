@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import {
+  View,
+  Text,
+  ActivityIndicator,
+  StyleSheet,
+  Platform,
+} from 'react-native';
 import {
   NavigationContainer,
   createNavigationContainerRef,
@@ -23,6 +29,8 @@ import {
   ReplyScreen,
   ConfirmScreen,
 } from '../screens';
+import { SubscriptionService } from '../services/subscriptionService';
+import { useStripe } from '@stripe/stripe-react-native';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
@@ -78,11 +86,101 @@ function AuthScreenContainer({ route, navigation }: AuthScreenWrapperProps) {
   );
 }
 
+// SetupIntent client secrets are formatted as "seti_xxx_secret_yyy"
+function extractSetupIntentId(clientSecret: string): string {
+  return clientSecret.split('_secret_')[0];
+}
+
 function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
-  const { logout } = useAuth();
+  const { logout, refreshSubscription, user } = useAuth();
+  const { initPaymentSheet, presentPaymentSheet } = useStripe();
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isTrialEligible, setIsTrialEligible] = useState<boolean | null>(null); // null = still checking
+
+  const handleSubscribe = async (
+    tier: 'standard' | 'executive' = 'executive',
+  ) => {
+    if (Platform.OS === 'ios') {
+      // Apple IAP flow goes here — separate piece, not built yet
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      setError(null);
+
+      // Step 1: create-trial-setup — creates a SetupIntent, no charge yet
+      const setupResult = await SubscriptionService.createTrialSetup(tier);
+      if (
+        setupResult.error ||
+        !setupResult.setupIntentClientSecret ||
+        !setupResult.customerId ||
+        !setupResult.ephemeralKeySecret
+      ) {
+        setError(setupResult.error ?? 'Failed to start checkout.');
+        return;
+      }
+
+      // Step 2: hand off to Stripe's native PaymentSheet to collect the card
+      const { error: initError } = await initPaymentSheet({
+        merchantDisplayName: 'Atlas',
+        customerId: setupResult.customerId,
+        customerEphemeralKeySecret: setupResult.ephemeralKeySecret,
+        setupIntentClientSecret: setupResult.setupIntentClientSecret,
+        allowsDelayedPaymentMethods: false,
+      });
+
+      if (initError) {
+        setError(initError.message);
+        return;
+      }
+
+      const { error: presentError } = await presentPaymentSheet();
+
+      if (presentError) {
+        // User canceled, or card was declined — not necessarily a "real" error
+        if (presentError.code !== 'Canceled') {
+          setError(presentError.message);
+        }
+        return;
+      }
+
+      // Step 3: card saved successfully — now actually create the trial subscription
+      const setupIntentId = extractSetupIntentId(
+        setupResult.setupIntentClientSecret,
+      );
+      const confirmResult = await SubscriptionService.confirmTrialSubscription(
+        setupIntentId,
+      );
+
+      if (confirmResult.error) {
+        setError(confirmResult.error);
+        return;
+      }
+
+      // Refresh AuthContext's subscription state so authRouteState flips
+      // to 'home' — the app navigates itself from here, no manual nav call.
+      await refreshSubscription(user);
+    } catch (err: any) {
+      setError(err.message ?? 'Something went wrong.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (Platform.OS === 'android' && user) {
+      SubscriptionService.createStripeCustomer(); // no-op if already exists
+    }
+    SubscriptionService.getTrialEligibility().then(result => {
+      setIsTrialEligible(result.isEligible);
+    });
+  }, []);
+
   return (
     <SubscribeScreen
-      onSubscribe={() => navigation.navigate('Onboard')}
+      onSubscribe={handleSubscribe}
       onBack={async () => {
         await logout();
         // Don't manually navigate here — logout() flips authRouteState to
@@ -90,6 +188,9 @@ function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
         // shows the Auth screen on its own. Manual navigate() would fight
         // with that and leave a stale session behind.
       }}
+      isProcessing={isProcessing}
+      error={error}
+      isTrialEligible={isTrialEligible ?? true}
     />
   );
 }
@@ -213,13 +314,6 @@ export function AppNavigator() {
   }
 
   const showOverlay = isLoading || authRouteState === 'loading';
-
-  console.log(
-    'AppNavigator authRouteState:',
-    authRouteState,
-    'initialRoute:',
-    initialRoute,
-  );
 
   return (
     <View style={navStyles.container}>

@@ -1,24 +1,43 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { View, Text, Pressable, Alert } from 'react-native';
 import styles from '../styles/styles';
 import { useAuth } from '../context/AuthContext';
 
 interface ProfileScreenProps {
   onLogout?: () => void;
+  handleCancelSubscription: () => void;
+  isCancelingSubscription: boolean;
 }
 
-export function ProfileScreen({ onLogout }: ProfileScreenProps) {
-  const { user, toggleAutoBook, toggleZeroRetention, logout } = useAuth();
+export function ProfileScreen({
+  onLogout,
+  handleCancelSubscription,
+  isCancelingSubscription,
+}: ProfileScreenProps) {
+  const {
+    user,
+    toggleAutoBook,
+    toggleZeroRetention,
+    logout,
+    subscription,
+    refreshSubscription,
+  } = useAuth();
 
   const handleLogout = async () => {
     await logout();
     if (onLogout) onLogout();
   };
 
+  useEffect(() => {
+    refreshSubscription();
+  }, []);
+
   const zeroRetention = user?.zeroRetentionEnabled ?? true;
   const autoBook = user?.autoBookEnabled ?? false;
   const nylasStatus = user?.nylasAccountStatus || 'connected';
-  const lastSynced = user?.lastEmailSyncedAt ? 'synced 1m ago' : 'synced recently';
+  const lastSynced = user?.lastEmailSyncedAt
+    ? 'synced 1m ago'
+    : 'synced recently';
 
   return (
     <View>
@@ -27,7 +46,9 @@ export function ProfileScreen({ onLogout }: ProfileScreenProps) {
         <View style={styles.row}>
           <View>
             <Text style={styles.rowTitle}>Connected email</Text>
-            <Text style={styles.rowSub}>Nylas · {nylasStatus} ({lastSynced})</Text>
+            <Text style={styles.rowSub}>
+              Nylas · {nylasStatus} ({lastSynced})
+            </Text>
           </View>
           <Text style={styles.rowIcon}>›</Text>
         </View>
@@ -35,7 +56,8 @@ export function ProfileScreen({ onLogout }: ProfileScreenProps) {
           <View>
             <Text style={styles.rowTitle}>Travel preferences</Text>
             <Text style={styles.rowSub}>
-              {user?.travelPreferences?.seatType || 'Aisle'} seat · {user?.travelPreferences?.minHotelRating || 4}-star min
+              {user?.travelPreferences?.seatType || 'Aisle'} seat ·{' '}
+              {user?.travelPreferences?.minHotelRating || 4}-star min
             </Text>
           </View>
           <Text style={styles.rowIcon}>›</Text>
@@ -44,7 +66,9 @@ export function ProfileScreen({ onLogout }: ProfileScreenProps) {
           <View>
             <Text style={styles.rowTitle}>Dining preferences</Text>
             <Text style={styles.rowSub}>
-              {user?.diningPreferences?.ambiance || 'Quiet'} · {user?.diningPreferences?.dietaryRestrictions?.join(', ') || 'no shellfish'}
+              {user?.diningPreferences?.ambiance || 'Quiet'} ·{' '}
+              {user?.diningPreferences?.dietaryRestrictions?.join(', ') ||
+                'no shellfish'}
             </Text>
           </View>
           <Text style={styles.rowIcon}>›</Text>
@@ -57,9 +81,7 @@ export function ProfileScreen({ onLogout }: ProfileScreenProps) {
 
       <View style={styles.card}>
         {/* Zero-retention mode — pressable pill toggle */}
-        <Pressable
-          style={styles.row}
-          onPress={toggleZeroRetention}>
+        <Pressable style={styles.row} onPress={toggleZeroRetention}>
           <View style={{ flex: 1 }}>
             <Text style={styles.rowTitle}>Zero-retention mode</Text>
             <Text style={styles.rowSub}>
@@ -69,15 +91,12 @@ export function ProfileScreen({ onLogout }: ProfileScreenProps) {
           <View
             style={[
               styles.pill,
-              zeroRetention
-                ? styles.pillActive
-                : styles.pillOff,
-            ]}>
+              zeroRetention ? styles.pillActive : styles.pillOff,
+            ]}
+          >
             <Text
-              style={[
-                styles.pillText,
-                !zeroRetention && styles.pillTextOff,
-              ]}>
+              style={[styles.pillText, !zeroRetention && styles.pillTextOff]}
+            >
               {zeroRetention ? 'Always on' : 'Off'}
             </Text>
           </View>
@@ -86,15 +105,50 @@ export function ProfileScreen({ onLogout }: ProfileScreenProps) {
         {/* Auto-book on confirm — real toggle switch */}
         <Pressable
           style={[styles.row, { borderBottomWidth: 0 }]}
-          onPress={toggleAutoBook}>
+          onPress={toggleAutoBook}
+        >
           <View style={{ flex: 1 }}>
             <Text style={styles.rowTitle}>Auto-book on confirm</Text>
-            <Text style={styles.rowSub}>Execute booking without a second tap</Text>
+            <Text style={styles.rowSub}>
+              Execute booking without a second tap
+            </Text>
           </View>
           <View style={[styles.toggleTrack, autoBook && styles.toggleTrackOn]}>
-            <View style={[styles.toggleThumb, autoBook && styles.toggleThumbOn]} />
+            <View
+              style={[styles.toggleThumb, autoBook && styles.toggleThumbOn]}
+            />
           </View>
         </Pressable>
+      </View>
+
+      <View style={{ marginTop: 24 }}>
+        {subscription?.cancelAtPeriodEnd ? (
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowSub}>
+              Your subscription will end on{' '}
+              {subscription.currentPeriodEnd
+                ? new Date(subscription.currentPeriodEnd).toLocaleDateString()
+                : 'your period end date'}
+              .
+            </Text>
+          </View>
+        ) : (
+          <Pressable
+            style={{
+              backgroundColor: '#FEE2E2',
+              paddingVertical: 14,
+              borderRadius: 12,
+              alignItems: 'center',
+            }}
+            onPress={handleCancelSubscription}
+          >
+            <Text style={{ color: '#EF4444', fontWeight: '600', fontSize: 15 }}>
+              {isCancelingSubscription
+                ? 'Cancelling...'
+                : 'Cancel Subscription'}
+            </Text>
+          </Pressable>
+        )}
       </View>
 
       <View style={{ marginTop: 24 }}>
@@ -105,8 +159,11 @@ export function ProfileScreen({ onLogout }: ProfileScreenProps) {
             borderRadius: 12,
             alignItems: 'center',
           }}
-          onPress={handleLogout}>
-          <Text style={{ color: '#EF4444', fontWeight: '600', fontSize: 15 }}>Sign out</Text>
+          onPress={handleLogout}
+        >
+          <Text style={{ color: '#EF4444', fontWeight: '600', fontSize: 15 }}>
+            Sign out
+          </Text>
         </Pressable>
       </View>
     </View>

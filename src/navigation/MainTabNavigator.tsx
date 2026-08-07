@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { CompositeNavigationProp } from '@react-navigation/native';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
@@ -14,6 +14,8 @@ import {
   ProfileScreen,
 } from '../screens';
 import { useAuth } from '../context/AuthContext';
+import { Alert, Platform } from 'react-native';
+import { SubscriptionService } from '../services/subscriptionService';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
@@ -140,7 +142,77 @@ function ProfileTabScreen({
 }: {
   navigation: ProfileScreenNavProp;
 }) {
-  const { logout } = useAuth();
+  const { user, subscription, refreshSubscription, logout } = useAuth();
+  const [isCanceling, setIsCanceling] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const handleCancelSubscription = () => {
+    if (Platform.OS === 'ios') {
+      // Apple IAP cancellations happen through the App Store / Settings
+      // app, not in-app — Apple doesn't allow apps to cancel IAP
+      // subscriptions programmatically. Point the user there instead.
+      Alert.alert(
+        'Manage Subscription',
+        'To cancel your subscription, go to Settings → Apple ID → Subscriptions on your device.',
+      );
+      return;
+    }
+
+    // Confirm before doing anything destructive
+    Alert.alert(
+      'Cancel Subscription',
+      subscription?.currentPeriodEnd
+        ? `You'll keep access until ${new Date(
+            subscription.currentPeriodEnd,
+          ).toLocaleDateString()}. You won't be charged again after that.`
+        : "You'll keep access until the end of your current billing period. You won't be charged again after that.",
+      [
+        { text: 'Keep Subscription', style: 'cancel' },
+        {
+          text: 'Cancel Subscription',
+          style: 'destructive',
+          onPress: confirmCancelSubscription,
+        },
+      ],
+    );
+  };
+
+  const confirmCancelSubscription = async () => {
+    try {
+      setIsCanceling(true);
+
+      const result = await SubscriptionService.cancelSubscription();
+
+      if (!result.success) {
+        Alert.alert(
+          'Unable to Cancel',
+          result.error ?? 'Something went wrong. Please try again.',
+        );
+        return;
+      }
+
+      // Pull the updated row (cancel_at_period_end: true) into AuthContext
+      // so anywhere in the app showing subscription status reflects this
+      // immediately, without waiting for the webhook round trip.
+      await refreshSubscription(user);
+
+      Alert.alert(
+        'Subscription Cancelled',
+        result.currentPeriodEnd
+          ? `You'll keep access until ${new Date(
+              result.currentPeriodEnd,
+            ).toLocaleDateString()}.`
+          : "You'll keep access until the end of your current billing period.",
+      );
+    } catch (err: any) {
+      Alert.alert(
+        'Unable to Cancel',
+        err.message ?? 'Something went wrong. Please try again.',
+      );
+    } finally {
+      setIsCanceling(false);
+    }
+  };
 
   return (
     <MainLayout
@@ -153,6 +225,10 @@ function ProfileTabScreen({
           await logout();
           navigation.navigate('Auth', { initialMode: 'login' });
         }}
+        handleCancelSubscription={() => {
+          handleCancelSubscription();
+        }}
+        isCancelingSubscription={isCanceling}
       />
     </MainLayout>
   );
