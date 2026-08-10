@@ -34,8 +34,6 @@ export class SubscriptionService {
         .limit(1)
         .maybeSingle();
 
-      console.log('getCurrentSubscription data:', data, 'error:', error);
-
       if (error) {
         return {
           subscription: null,
@@ -225,6 +223,9 @@ export class SubscriptionService {
   static async confirmTrialSubscription(setupIntentId: string): Promise<{
     success: boolean;
     error: string | null;
+    status?: string;
+    paymentIntentStatus?: string | null;
+    paymentIntentClientSecret?: string | null;
   }> {
     try {
       const { data, error } = await supabase.functions.invoke(
@@ -244,7 +245,13 @@ export class SubscriptionService {
         };
       }
 
-      return { success: true, error: null };
+      return {
+        success: true,
+        error: null,
+        status: data.status,
+        paymentIntentStatus: data.paymentIntentStatus,
+        paymentIntentClientSecret: data.paymentIntentClientSecret,
+      };
     } catch (err: any) {
       return {
         success: false,
@@ -327,6 +334,45 @@ export class SubscriptionService {
         cancelAtPeriodEnd: false,
         currentPeriodEnd: null,
         error: err.message ?? 'Unable to cancel subscription.',
+      };
+    }
+  }
+
+  static async syncSubscriptionStatus(): Promise<{
+    synced: boolean;
+    changed: boolean;
+    status: string | null;
+    error: string | null;
+  }> {
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        'sync-subscription-status',
+      );
+
+      if (error) {
+        return {
+          synced: false,
+          changed: false,
+          status: null,
+          error: await extractEdgeFunctionErrorMessage(
+            error,
+            'Unable to sync subscription.',
+          ),
+        };
+      }
+
+      return {
+        synced: data.synced,
+        changed: data.changed ?? false,
+        status: data.status ?? null,
+        error: null,
+      };
+    } catch (err: any) {
+      return {
+        synced: false,
+        changed: false,
+        status: null,
+        error: err.message,
       };
     }
   }

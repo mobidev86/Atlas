@@ -13,6 +13,7 @@ export default function AppStripeProvider({ children }: Props): ReactElement {
         'pk_test_51U14cHLBzqVdCxhPjGhdHiDwk5uu93suGRWSdgO5oTXxbMLWyB7TcmaqX5vngUGsJbNhQIFGU9CwbBOAP1whC1Nd00iIZdgRcv'
       }
       merchantIdentifier="merchant.com.atlasproject"
+      urlScheme="atlas"
     >
       {children}
     </StripeProvider>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { CompositeNavigationProp } from '@react-navigation/native';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
@@ -146,6 +146,15 @@ function ProfileTabScreen({
   const [isCanceling, setIsCanceling] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
 
+  useEffect(() => {
+    // Reconcile with Stripe's actual state whenever this screen opens
+    SubscriptionService.syncSubscriptionStatus().then(result => {
+      if (result.changed) {
+        refreshSubscription(user); // pull the corrected row into AuthContext
+      }
+    });
+  }, []);
+
   const handleCancelSubscription = () => {
     if (Platform.OS === 'ios') {
       // Apple IAP cancellations happen through the App Store / Settings
@@ -191,11 +200,21 @@ function ProfileTabScreen({
         return;
       }
 
-      // Pull the updated row (cancel_at_period_end: true) into AuthContext
-      // so anywhere in the app showing subscription status reflects this
-      // immediately, without waiting for the webhook round trip.
-      await refreshSubscription(user);
+      const syncResult = await SubscriptionService.syncSubscriptionStatus();
+      if (syncResult.changed) {
+        await refreshSubscription(user);
+      }
 
+      if (
+        subscription?.status === 'canceled' ||
+        syncResult.status === 'canceled'
+      ) {
+        Alert.alert(
+          'Already Cancelled',
+          'Your subscription has already been cancelled.',
+        );
+        return;
+      }
       Alert.alert(
         'Subscription Cancelled',
         result.currentPeriodEnd

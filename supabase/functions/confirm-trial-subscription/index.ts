@@ -31,7 +31,6 @@ export default {
         );
       }
 
-      // setupIntent is defined here
       const setupIntent = await stripe.setupIntents.retrieve(setupIntentId);
 
       if (setupIntent.status !== 'succeeded') {
@@ -56,8 +55,6 @@ export default {
       const priceId = setupIntent.metadata?.price_id;
       const customerId = setupIntent.customer as string;
       const paymentMethodId = setupIntent.payment_method as string;
-
-      // trialDays goes HERE — after setupIntent exists, not at the top of the file
       const trialDays = Number(setupIntent.metadata?.trial_days ?? 7);
 
       if (!priceId) {
@@ -88,11 +85,23 @@ export default {
         );
       }
 
+      const existingSubs = await stripe.subscriptions.list({
+        customer: customerId,
+        status: 'incomplete',
+      });
+
+      for (const sub of existingSubs.data) {
+        await stripe.subscriptions.cancel(sub.id);
+      }
+
+      // ✅ Added: payment_behavior + expand, so we can see if 3DS is needed
       const subscription = await stripe.subscriptions.create({
         customer: customerId,
         items: [{ price: priceId }],
         trial_period_days: trialDays,
         default_payment_method: paymentMethodId,
+        payment_behavior: 'default_incomplete',
+        expand: ['latest_invoice.payment_intent'],
         metadata: {
           supabase_user_id: user.id,
           tier,
@@ -132,9 +141,43 @@ export default {
         console.error('Failed to write subscriptions row:', upsertError);
       }
 
+      const { error: markTrialUsedError } = await ctx.supabaseAdmin
+        .from('profiles')
+        .update({ has_used_trial: true, updated_at: new Date().toISOString() })
+        .eq('id', user.id);
+
+      if (markTrialUsedError) {
+        console.error('Failed to mark trial as used:', markTrialUsedError);
+      }
+
+      // ✅ Added: pull the PaymentIntent out (only present if a charge was actually attempted —
+      // e.g. no trial days left, so payment is due immediately)
+      const invoice = subscription.latest_invoice as Stripe.Invoice;
+      let paymentIntent = invoice.payment_intent as Stripe.PaymentIntent;
+
+      if (paymentIntent && paymentIntent.status === 'requires_confirmation') {
+        try {
+          paymentIntent = await stripe.paymentIntents.confirm(
+            paymentIntent.id,
+            {
+              payment_method: paymentMethodId,
+            },
+          );
+        } catch (confirmError: any) {
+          if (confirmError.payment_intent) {
+            paymentIntent = confirmError.payment_intent;
+          } else {
+            console.error('PaymentIntent confirm failed:', confirmError);
+            throw confirmError;
+          }
+        }
+      }
+
       return Response.json({
         subscriptionId: subscription.id,
         status: subscription.status,
+        paymentIntentStatus: paymentIntent?.status ?? null,
+        paymentIntentClientSecret: paymentIntent?.client_secret ?? null,
       });
     } catch (error) {
       console.error(error);

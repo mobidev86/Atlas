@@ -42,28 +42,6 @@ export default {
         case 'customer.subscription.deleted': {
           const subscription = event.data.object as Stripe.Subscription;
 
-          // TEMP DEBUG — remove after checking
-          console.log('=== Webhook event:', event.type, '===');
-          console.log('subscription.status:', subscription.status);
-          console.log(
-            'subscription.current_period_start:',
-            subscription.current_period_start,
-          );
-          console.log(
-            'subscription.current_period_end:',
-            subscription.current_period_end,
-          );
-          console.log(
-            'subscription.items.data:',
-            JSON.stringify(subscription.items?.data, null, 2),
-          );
-          console.log(
-            'subscription.cancel_at_period_end:',
-            subscription.cancel_at_period_end,
-          );
-          console.log('subscription.metadata:', subscription.metadata);
-          // END TEMP DEBUG
-
           const userId = subscription.metadata?.supabase_user_id;
           if (!userId) {
             console.error(

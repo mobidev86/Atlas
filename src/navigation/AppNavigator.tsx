@@ -93,7 +93,8 @@ function extractSetupIntentId(clientSecret: string): string {
 
 function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
   const { logout, refreshSubscription, user } = useAuth();
-  const { initPaymentSheet, presentPaymentSheet } = useStripe();
+  const { initPaymentSheet, presentPaymentSheet, handleNextAction } =
+    useStripe();
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isTrialEligible, setIsTrialEligible] = useState<boolean | null>(null); // null = still checking
@@ -102,7 +103,10 @@ function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
     tier: 'standard' | 'executive' = 'executive',
   ) => {
     if (Platform.OS === 'ios') {
-      // Apple IAP flow goes here — separate piece, not built yet
+      return;
+    }
+
+    if (isProcessing) {
       return;
     }
 
@@ -129,6 +133,7 @@ function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
         customerEphemeralKeySecret: setupResult.ephemeralKeySecret,
         setupIntentClientSecret: setupResult.setupIntentClientSecret,
         allowsDelayedPaymentMethods: false,
+        returnURL: 'atlas://stripe-redirect',
       });
 
       if (initError) {
@@ -154,13 +159,33 @@ function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
         setupIntentId,
       );
 
-      if (confirmResult.error) {
+      if (!confirmResult.success) {
         setError(confirmResult.error);
         return;
       }
 
-      // Refresh AuthContext's subscription state so authRouteState flips
-      // to 'home' — the app navigates itself from here, no manual nav call.
+      // ✅ NEW: resolve 3DS on the invoice's PaymentIntent, if Stripe requires it
+      if (
+        confirmResult.paymentIntentStatus === 'requires_action' &&
+        confirmResult.paymentIntentClientSecret
+      ) {
+        const { error: nextActionError, paymentIntent } =
+          await handleNextAction(confirmResult.paymentIntentClientSecret);
+
+        if (nextActionError) {
+          setError(
+            nextActionError.message ?? '3D Secure authentication failed.',
+          );
+          return;
+        }
+
+        if (paymentIntent?.status !== 'Succeeded') {
+          // ✅ capital S, matches the RN SDK's enum
+          setError('Payment could not be completed. Please try again.');
+          return;
+        }
+      }
+
       await refreshSubscription(user);
     } catch (err: any) {
       setError(err.message ?? 'Something went wrong.');

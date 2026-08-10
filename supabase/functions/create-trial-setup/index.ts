@@ -37,7 +37,6 @@ export default {
         );
       }
 
-      // Look up the active product config instead of reading env vars
       const { data: product, error: productError } = await ctx.supabase
         .from('subscription_products')
         .select('price_id, trial_days')
@@ -55,7 +54,7 @@ export default {
 
       const { data: profile, error: profileError } = await ctx.supabase
         .from('profiles')
-        .select('stripe_customer_id')
+        .select('stripe_customer_id, has_used_trial')
         .eq('id', user.id)
         .single();
 
@@ -94,6 +93,10 @@ export default {
         { apiVersion: '2024-06-20' },
       );
 
+      const trialDays = profile.has_used_trial ? 0 : product.trial_days;
+
+      // ✅ Just a SetupIntent here — NOT a subscription.
+      // The actual subscription/charge happens in confirm-trial-subscription.
       const setupIntent = await stripe.setupIntents.create({
         customer: customerId,
         payment_method_types: ['card'],
@@ -102,7 +105,7 @@ export default {
           supabase_user_id: user.id,
           tier,
           price_id: product.price_id,
-          trial_days: String(product.trial_days),
+          trial_days: String(trialDays),
         },
       });
 
@@ -110,7 +113,7 @@ export default {
         setupIntentClientSecret: setupIntent.client_secret,
         ephemeralKeySecret: ephemeralKey.secret,
         customerId,
-        tier,
+        error: null,
       });
     } catch (error) {
       console.error(error);
