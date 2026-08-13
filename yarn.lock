@@ -2966,6 +2966,7 @@ __metadata:
     react-native-safe-area-context: ^5.8.1
     react-native-screens: ^4.26.2
     react-native-url-polyfill: ^4.0.0
+    react-native-voicekit: ^0.2.2
     react-test-renderer: 19.2.3
     typescript: ^5.8.3
   languageName: unknown
@@ -7709,6 +7710,20 @@ __metadata:
   peerDependencies:
     react-native: "*"
   checksum: 5582116d3e5ece5092e467877e0a99550b3d76a3b527456ee866da1fb97bf6d50ac91b8b5f5828da0e55a414ce9c3ea864eca0073fb6773130aa2785f9cd9652
+  languageName: node
+  linkType: hard
+
+"react-native-voicekit@npm:^0.2.2":
+  version: 0.2.2
+  resolution: "react-native-voicekit@npm:0.2.2"
+  peerDependencies:
+    expo: "*"
+    react: "*"
+    react-native: "*"
+  peerDependenciesMeta:
+    expo:
+      optional: true
+  checksum: 616c0c890d984269723b3df66314c5520ae52c830b0bc67a7fbfa75932bd99e76f1b01f90ec9df933349dc3a7f3b7b149217b426a9ccb058ccf9c1e34e26e3b9
   languageName: node
   linkType: hard
 
