@@ -34,6 +34,9 @@ local.properties
 *.keystore
 !debug.keystore
 .kotlin/
+/android/app/src/main/res/drawable-*
+/android/app/src/main/assets/index.android.bundle
+android/app/src/main/res/raw/keep.xml
 
 # node.js
 #

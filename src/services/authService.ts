@@ -12,6 +12,56 @@ export class AuthService {
   /**
    * Login
    */
+  // static async login(
+  //   email: string,
+  //   password: string,
+  // ): Promise<{
+  //   user: UserProfile | null;
+  //   error: string | null;
+  // }> {
+  //   try {
+  //     if (!email.trim()) {
+  //       return {
+  //         user: null,
+  //         error: 'Email is required.',
+  //       };
+  //     }
+
+  //     if (!password.trim()) {
+  //       return {
+  //         user: null,
+  //         error: 'Password is required.',
+  //       };
+  //     }
+
+  //     const { data, error } = await supabase.auth.signInWithPassword({
+  //       email: email.trim().toLowerCase(),
+  //       password,
+  //     });
+
+  //     if (error) {
+  //       return {
+  //         user: null,
+  //         error: error.message,
+  //       };
+  //     }
+
+  //     if (!data.user) {
+  //       return {
+  //         user: null,
+  //         error: 'Unable to login.',
+  //       };
+  //     }
+
+  //     return await ProfileService.getCurrentProfile();
+  //   } catch (error: any) {
+  //     return {
+  //       user: null,
+  //       error: error?.message ?? 'Login failed.',
+  //     };
+  //   }
+  // }
+
   static async login(
     email: string,
     password: string,
@@ -53,7 +103,12 @@ export class AuthService {
         };
       }
 
-      return await ProfileService.getCurrentProfile();
+      // Login is complete at this point.
+      // Do NOT wait for the profile request.
+      return {
+        user: data.user as unknown as UserProfile,
+        error: null,
+      };
     } catch (error: any) {
       return {
         user: null,
@@ -65,6 +120,87 @@ export class AuthService {
   /**
    * Register
    */
+  // static async register(
+  //   email: string,
+  //   password: string,
+  //   fullName?: string,
+  // ): Promise<{
+  //   user: UserProfile | null;
+  //   error: string | null;
+  // }> {
+  //   try {
+  //     if (!email.trim()) {
+  //       return {
+  //         user: null,
+  //         error: 'Email is required.',
+  //       };
+  //     }
+
+  //     if (password.length < 6) {
+  //       return {
+  //         user: null,
+  //         error: 'Password must be at least 6 characters.',
+  //       };
+  //     }
+
+  //     const { data, error } = await supabase.auth.signUp({
+  //       email: email.trim().toLowerCase(),
+  //       password,
+  //       options: {
+  //         data: {
+  //           full_name: fullName ?? '',
+  //         },
+  //       },
+  //     });
+
+  //     if (error) {
+  //       return {
+  //         user: null,
+  //         error: error.message,
+  //       };
+  //     }
+
+  //     if (!data.user) {
+  //       return {
+  //         user: null,
+  //         error: 'Unable to register user.',
+  //       };
+  //     }
+
+  //     /**
+  //      * Email verification enabled
+  //      *
+  //      * User exists
+  //      * Session does not.
+  //      */
+  //     if (!data.session) {
+  //       return {
+  //         user: null,
+  //         error:
+  //           'Verification email sent. Please verify your email before logging in.',
+  //       };
+  //     }
+
+  //     const profile = await ProfileService.createProfile({
+  //       id: data.user.id,
+  //       email: data.user.email!,
+  //       fullName,
+  //       autoBookEnabled: false,
+  //       zeroRetentionEnabled: true,
+  //       travelPreferences: DEFAULT_TRAVEL_PREFERENCES,
+  //       diningPreferences: DEFAULT_DINING_PREFERENCES,
+  //       nylasAccountStatus: 'disconnected',
+  //     });
+
+  //     return profile;
+  //   } catch (error: any) {
+  //     return {
+  //       user: null,
+  //       error: error?.message ?? 'Registration failed.',
+  //     };
+  //   }
+  // }
+
   static async register(
     email: string,
     password: string,
@@ -126,7 +262,12 @@ export class AuthService {
         };
       }
 
-      const profile = await ProfileService.createProfile({
+      /**
+       * Create profile in background.
+       *
+       * We intentionally do NOT await this.
+       */
+      ProfileService.createProfile({
         id: data.user.id,
         email: data.user.email!,
         fullName,
@@ -135,9 +276,17 @@ export class AuthService {
         travelPreferences: DEFAULT_TRAVEL_PREFERENCES,
         diningPreferences: DEFAULT_DINING_PREFERENCES,
         nylasAccountStatus: 'disconnected',
+      }).catch(profileError => {
+        console.error('BACKGROUND PROFILE CREATION ERROR:', profileError);
       });
 
-      return profile;
+      /**
+       * Return immediately after Supabase registration.
+       */
+      return {
+        user: data.user as unknown as UserProfile,
+        error: null,
+      };
     } catch (error: any) {
       return {
         user: null,

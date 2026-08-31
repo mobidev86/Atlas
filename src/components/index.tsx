@@ -5,8 +5,12 @@ import {
   Pressable,
   TextInput,
   TouchableOpacity,
+  Image,
 } from 'react-native';
 import styles from '../styles/styles';
+
+import EYE_OPEN_ICON from '../assets/images/ic_hide_pass.png';
+import EYE_CLOSED_ICON from '../assets/images/ic_show_pass.png';
 
 // Badge Component
 interface BadgeProps {
@@ -166,7 +170,11 @@ export function InputField({
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           activeOpacity={0.7}
         >
-          <Text style={styles.toggleText}>{isVisible ? 'Hide' : 'Show'}</Text>
+          <Image
+            source={isVisible ? EYE_OPEN_ICON : EYE_CLOSED_ICON}
+            style={styles.toggleIcon}
+            resizeMode="contain"
+          />
         </TouchableOpacity>
       )}
     </View>

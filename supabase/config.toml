@@ -478,3 +478,124 @@ entrypoint = "./functions/sync-subscription-status/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/sync-subscription-status/*.html" ]
+
+[functions.deepgram-token]
+enabled = true
+verify_jwt = false
+import_map = "./functions/deepgram-token/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/deepgram-token/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/deepgram-token/*.html" ]
+
+[functions.travel-intent]
+enabled = true
+verify_jwt = false
+import_map = "./functions/travel-intent/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/travel-intent/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/travel-intent/*.html" ]
+
+[functions.travel-search]
+enabled = true
+verify_jwt = false
+import_map = "./functions/travel-search/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/travel-search/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/travel-search/*.html" ]
+
+[functions.duffel-client-key]
+enabled = true
+verify_jwt = false
+import_map = "./functions/duffel-client-key/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/duffel-client-key/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/duffel-client-key/*.html" ]
+
+[functions.google-oauth-start]
+enabled = true
+verify_jwt = false
+import_map = "./functions/google-oauth-start/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/google-oauth-start/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/google-oauth-start/*.html" ]
+
+[functions.google-oauth-callback]
+enabled = true
+verify_jwt = false
+import_map = "./functions/google-oauth-callback/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/google-oauth-callback/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/google-oauth-callback/*.html" ]
+
+[functions.zoom-oauth]
+enabled = true
+verify_jwt = false
+import_map = "./functions/zoom-oauth/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/zoom-oauth/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/zoom-oauth/*.html" ]
+
+[functions.zoom-connect]
+enabled = true
+verify_jwt = false
+import_map = "./functions/zoom-connect/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/zoom-connect/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/zoom-connect/*.html" ]
+
+[functions.duffel-checkout-session]
+enabled = true
+verify_jwt = false
+import_map = "./functions/duffel-checkout-session/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/duffel-checkout-session/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/duffel-checkout-session/*.html" ]
+
+[functions.parse-booking-intent]
+enabled = true
+verify_jwt = false
+import_map = "./functions/parse-booking-intent/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/parse-booking-intent/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/parse-booking-intent/*.html" ]
+
+[functions.duffel-checkout-callback]
+enabled = true
+verify_jwt = false
+import_map = "./functions/duffel-checkout-callback/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/duffel-checkout-callback/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/duffel-checkout-callback/*.html" ]

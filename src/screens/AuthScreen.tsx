@@ -1,15 +1,19 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   ScrollView,
   KeyboardAvoidingView,
   Platform,
   Text,
+  Image,
 } from 'react-native';
 import styles from '../styles/styles';
 import { InputField, PrimaryButton, LinkText } from '../components';
 import { AuthMode } from '../types';
 import { useAuth } from '../context/AuthContext';
+import { MessageToast } from '../services/messageToast';
+
+import logo from '../assets/images/ic_logo.png';
 
 interface AuthScreenProps {
   authMode: AuthMode;
@@ -18,23 +22,38 @@ interface AuthScreenProps {
 
 export function AuthScreen({ authMode, onSwitchMode }: AuthScreenProps) {
   const { login, register } = useAuth();
+
+  const scrollViewRef = useRef<ScrollView>(null);
+
   const [focusedInput, setFocusedInput] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handleInputFocus = (inputKey: string) => {
+    setFocusedInput(inputKey);
+
+    // Give the keyboard a moment to appear,
+    // then move the form upward.
+    setTimeout(() => {
+      scrollViewRef.current?.scrollToEnd({
+        animated: true,
+      });
+    }, 250);
+  };
 
   const handleSubmit = async () => {
-    setErrorMessage(null);
     if (authMode === 'login') {
       const { success, error } = await login(email, password);
+
       if (!success) {
-        setErrorMessage(error || 'Login failed.');
+        MessageToast.error(error || 'Login failed.');
       }
     } else {
       const { success, error } = await register(email, password, fullName);
+
       if (!success) {
-        setErrorMessage(error || 'Registration failed.');
+        MessageToast.error(error || 'Registration failed.');
       }
     }
   };
@@ -42,17 +61,27 @@ export function AuthScreen({ authMode, onSwitchMode }: AuthScreenProps) {
   return (
     <KeyboardAvoidingView
       style={styles.authScreen}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
     >
       <ScrollView
-        contentContainerStyle={styles.authScroll}
+        ref={scrollViewRef}
+        contentContainerStyle={[
+          styles.authScroll,
+          {
+            flexGrow: 1,
+            paddingBottom: 70,
+          },
+        ]}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
       >
         <View style={styles.brandWrap}>
-          <View style={styles.brandBadge}>
-            <Text style={styles.brandBadgeText}>A</Text>
-          </View>
+          <Image source={logo} style={styles.brandLogo} resizeMode="contain" />
+
           <Text style={styles.brandTitle}>Atlas</Text>
+
           <Text style={styles.brandSubtitleAuth}>
             Sign in or create your account to continue your day with calm
             control.
@@ -63,26 +92,12 @@ export function AuthScreen({ authMode, onSwitchMode }: AuthScreenProps) {
           <Text style={styles.cardEyebrow}>
             {authMode === 'login' ? 'Welcome back' : 'Create your account'}
           </Text>
+
           <Text style={styles.cardTitle}>
             {authMode === 'login'
               ? 'Sign in to continue your day'
               : 'Start with a cleaner way to travel'}
           </Text>
-
-          {errorMessage && (
-            <View
-              style={{
-                backgroundColor: '#FEE2E2',
-                padding: 10,
-                borderRadius: 8,
-                marginBottom: 12,
-              }}
-            >
-              <Text style={{ color: '#EF4444', fontSize: 13 }}>
-                {errorMessage}
-              </Text>
-            </View>
-          )}
 
           {authMode === 'register' && (
             <InputField
@@ -91,7 +106,7 @@ export function AuthScreen({ authMode, onSwitchMode }: AuthScreenProps) {
               inputKey="name"
               value={fullName}
               onChangeText={setFullName}
-              onFocus={setFocusedInput}
+              onFocus={() => handleInputFocus('name')}
               onBlur={() => setFocusedInput(null)}
             />
           )}
@@ -102,7 +117,7 @@ export function AuthScreen({ authMode, onSwitchMode }: AuthScreenProps) {
             inputKey="email"
             value={email}
             onChangeText={setEmail}
-            onFocus={setFocusedInput}
+            onFocus={() => handleInputFocus('email')}
             onBlur={() => setFocusedInput(null)}
             keyboardType="email-address"
           />
@@ -112,8 +127,8 @@ export function AuthScreen({ authMode, onSwitchMode }: AuthScreenProps) {
             focusedInput={focusedInput}
             inputKey="password"
             value={password}
-            onChangeText={(text: string) => setPassword(text)}
-            onFocus={setFocusedInput}
+            onChangeText={setPassword}
+            onFocus={() => handleInputFocus('password')}
             onBlur={() => setFocusedInput(null)}
             secureTextEntry
           />

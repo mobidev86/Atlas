@@ -3,6 +3,7 @@ import React, {
   useContext,
   useState,
   useEffect,
+  useRef,
   useMemo,
 } from 'react';
 import { AuthService } from '../services/authService';
@@ -17,6 +18,7 @@ import {
 } from '../types/UserProfile';
 import { ONBOARDING_KEY } from '../config/constants';
 import { Subscription } from '../types/Subscription';
+import { RealtimeChannel } from '@supabase/supabase-js';
 
 export type AuthRouteState =
   | 'loading'
@@ -74,6 +76,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isSubscriptionLoading, setIsSubscriptionLoading] = useState(false);
   const [subscriptionChecked, setSubscriptionChecked] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
+  const profileChannelRef = useRef<RealtimeChannel | null>(null);
 
   useEffect(() => {
     const initAuth = async () => {
@@ -127,6 +130,62 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Realtime subscription for profile flags (auto_book_enabled,
+  // zero_retention_enabled) — picks up changes made from the Supabase
+  // dashboard (or anywhere else) and merges them into `user` live,
+  // with no user interaction required in the app.
+  useEffect(() => {
+    if (profileChannelRef.current) {
+      supabase.removeChannel(profileChannelRef.current);
+      profileChannelRef.current = null;
+    }
+
+    if (!user?.id) {
+      return;
+    }
+
+    const channel = supabase
+      .channel(`profile-settings-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'profiles',
+          filter: `id=eq.${user.id}`,
+        },
+        async payload => {
+          if (payload.new.is_banned) {
+            // User was banned from the dashboard — force logout immediately,
+            // no user interaction needed.
+            await logout();
+            return;
+          }
+
+          setUser(prev =>
+            prev
+              ? {
+                  ...prev,
+                  autoBookEnabled: payload.new.auto_book_enabled,
+                  zeroRetentionEnabled: payload.new.zero_retention_enabled,
+                }
+              : prev,
+          );
+        },
+      )
+      .subscribe();
+
+    profileChannelRef.current = channel;
+
+    return () => {
+      if (profileChannelRef.current) {
+        supabase.removeChannel(profileChannelRef.current);
+        profileChannelRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const refreshSubscription = async (resolvedUser?: UserProfile | null) => {
     // Accept an explicit user argument to avoid stale closure issues
@@ -298,13 +357,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const isSubscribed =
     subscription?.status === 'active' || subscription?.status === 'trialing';
 
-  // Single source of truth for top-level routing. Derived (not a separate
-  // useState) so it can never drift out of sync — no setter calls to forget.
-  //
-  // 'loading' is deliberately distinct from 'subscription': it covers the
-  // window between "user just signed in" and "we've actually confirmed
-  // their subscription status" so AppNavigator never briefly flashes the
-  // Subscribe screen before landing on Home for an already-subscribed user.
   const authRouteState: AuthRouteState = useMemo(() => {
     if (!hasCompletedOnboarding) return 'onboarding';
     if (!user) return 'auth';

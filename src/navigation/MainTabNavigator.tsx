@@ -259,6 +259,7 @@ export function MainTabNavigator() {
       tabBar={props => <CustomTabBar {...props} />}
       screenOptions={{
         headerShown: false,
+        tabBarHideOnKeyboard: true,
       }}
     >
       <Tab.Screen name="Home" component={HomeTabScreen} />

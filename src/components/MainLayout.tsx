@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { View, ScrollView, Pressable, Text, Alert } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import styles, { colors } from '../styles/styles';
@@ -27,8 +27,15 @@ export function MainLayout({
   subtitle,
   onBack,
 }: MainLayoutProps) {
-  const { user, logout } = useAuth();
+  const { user, logout, refreshProfile } = useAuth();
   const navigation = useNavigation<MainLayoutNavigationProp>();
+
+  // Refresh the latest profile data whenever MainLayout mounts.
+  // This ensures the Home header gets the latest user information
+  // after registration/profile updates.
+  useEffect(() => {
+    refreshProfile();
+  }, [refreshProfile]);
 
   const handleLogout = () => {
     Alert.alert('Sign out', 'Are you sure you want to sign out of Atlas?', [
@@ -37,12 +44,8 @@ export function MainLayout({
         text: 'Sign out',
         style: 'destructive',
         onPress: async () => {
-          if (onBack) {
-            onBack();
-          } else {
-            await logout();
-            navigation.navigate('Auth', { initialMode: 'login' });
-          }
+          await logout();
+          navigation.navigate('Auth', { initialMode: 'login' });
         },
       },
     ]);
@@ -55,10 +58,16 @@ export function MainLayout({
           <Text style={styles.eyebrow}>{subtitle}</Text>
           <Text style={styles.title}>{title}</Text>
         </View>
+
         <View style={styles.headerRight}>
           <Pressable style={styles.logoutBtn} onPress={handleLogout}>
-            <Ionicons name="log-out-outline" size={20} color={colors.charcoal} />
+            <Ionicons
+              name="log-out-outline"
+              size={20}
+              color={colors.charcoal}
+            />
           </Pressable>
+
           <Pressable
             style={styles.avatar}
             onPress={() => navigation.navigate('Profile')}

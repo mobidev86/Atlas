@@ -70,7 +70,7 @@ export const styles = StyleSheet.create({
   },
   brandWrap: {
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: 60,
   },
   brandBadge: {
     width: 72,
@@ -113,7 +113,7 @@ export const styles = StyleSheet.create({
     letterSpacing: -0.5,
   },
   brandTitleLarge: {
-    fontSize: 48,
+    fontSize: 40,
     color: colors.charcoal,
     fontWeight: '700',
     letterSpacing: -1.5,
@@ -248,6 +248,7 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
     zIndex: 10,
   },
+  toggleIcon: { width: 20, height: 20 },
   toggleText: {
     color: '#4A6CF7', // match your accent color
     fontSize: 13,
@@ -640,12 +641,28 @@ export const styles = StyleSheet.create({
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
     elevation: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
+
   searchInput: {
+    flex: 1,
     color: colors.charcoal,
     fontSize: 15,
     paddingVertical: 12,
     fontWeight: '500',
+  },
+
+  audioWaveformContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+
+  iconButton: {
+    padding: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   resultCard: {
     backgroundColor: colors.white,
@@ -1361,6 +1378,10 @@ export const styles = StyleSheet.create({
     borderRadius: 4,
     marginLeft: 10,
     flexShrink: 0,
+  },
+  brandLogo: {
+    width: 80,
+    height: 80,
   },
 });
 

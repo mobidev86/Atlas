@@ -40,7 +40,6 @@ export interface SearchResult {
 // User Profile & Preferences
 export * from './UserProfile';
 
-
 // ToDo List Types
 export interface TodoItem {
   id: string;
@@ -74,8 +73,22 @@ export interface FlightOption {
   departureTime: string;
   arrivalTime: string;
   price: string;
+  currency?: string;
   cabinClass: string;
+  duration?: string;
+  stops?: number;
   badge?: string;
+
+  returnFlight?: {
+    airline: string;
+    flightNumber: string;
+    origin: string;
+    destination: string;
+    departureTime: string;
+    arrivalTime: string;
+    duration?: string;
+    stops?: number;
+  };
 }
 
 export interface HotelOption {

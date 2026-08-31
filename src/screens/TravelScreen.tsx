@@ -1,180 +1,1594 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
-  TextInput,
   Text,
+  TextInput,
   ActivityIndicator,
   TouchableOpacity,
+  StyleSheet,
+  Modal,
+  ScrollView,
 } from 'react-native';
-import { useVoice, VoiceMode } from 'react-native-voicekit';
+
 import styles from '../styles/styles';
 import { ResultCard, PrimaryButton } from '../components';
-import { TravelService } from '../services/travelService';
-import { SearchResult } from '../types';
+import { BookingBridge } from '../components/BookingBridge';
+import { InAppWebView } from '../components/InAppWebview';
+import { SearchResult, FlightOption, HotelOption } from '../types';
 import { useAuth } from '../context/AuthContext';
+import Ionicons from '@react-native-vector-icons/ionicons';
+import { useAudioRecorder } from '../hooks/useAudioRecorder';
+import { supabase } from '../services/supabase';
+import { MessageToast } from '../services/messageToast';
+import AudioWaveform from '../components/AudioWaveform';
+import { DuffelCheckoutService } from '../services/DuffelCheckoutService';
+
+import {
+  DuffelCardForm,
+  useDuffelCardFormActions,
+} from '@duffel/react-native-components-card-form';
+
+import {
+  TravelIntent,
+  TravelIntentResponse,
+  validateTravelIntent,
+} from '../utils/travelIntentValidator';
 
 interface TravelScreenProps {
   onBook: (item: string, provider: string, price: string) => void;
 }
 
-const DEFAULT_RESULTS: SearchResult[] = [
-  {
-    title: 'Emirates EK 0202 — Business Class',
-    meta: 'JFK → DXB · Aug 4 · 12h30m',
-    price: '$3,420',
-    badges: ['AISLE SEAT MATCHED', 'BUSINESS CLASS'],
-  },
-  {
-    title: 'The Ritz-Carlton, Dubai',
-    meta: '4.9★ · Executive Suite · JBR',
-    price: '$650 / night',
-    badges: ['5-STAR RATING', 'FREE CANCELLATION'],
-  },
-];
+interface FlightSearchResponse {
+  success: boolean;
+  type: 'flight';
+  flights: FlightOption[];
+}
 
-// Cap a single voice request at 60s — generous for a detailed request
-// ("suggest a summer vacation for 2-3 days, budget X, preference Y")
-// while staying well under upload/file-size limits if this later routes
-// through any cloud transcription fallback.
-const MAX_LISTEN_MS = 60_000;
+interface HotelSearchResponse {
+  success: boolean;
+  type: 'hotel';
+  hotels: HotelOption[];
+}
+
+type TravelSearchResponse = FlightSearchResponse | HotelSearchResponse;
+
+interface PendingBooking {
+  title: string;
+  provider: string;
+  price: string;
+}
+
+const TEST_DUFFEL_OFFER_ID = 'off_0000B9gn5qFoFIiOgejCrc';
 
 export function TravelScreen({ onBook }: TravelScreenProps) {
   const { user } = useAuth();
+
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState<SearchResult[]>(DEFAULT_RESULTS);
+  const [results, setResults] = useState<SearchResult[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
+
+  const [searchType, setSearchType] = useState<'flight' | 'hotel' | null>(null);
+
+  const [pendingBooking, setPendingBooking] = useState<PendingBooking | null>(
+    null,
+  );
+
+  const [selectedFlight, setSelectedFlight] = useState<FlightOption | null>(
+    null,
+  );
+
+  const [componentClientKey, setComponentClientKey] = useState<string | null>(
+    null,
+  );
+
+  const [showCardForm, setShowCardForm] = useState(false);
+  const [cardValid, setCardValid] = useState(false);
+  const [creatingCard, setCreatingCard] = useState(false);
+
+  const [cardError, setCardError] = useState<string | null>(null);
+
   const autoStopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { available, listening, transcript, startListening, stopListening } =
-    useVoice({
-      locale: 'en-US',
-      mode: VoiceMode.Continuous,
-      enablePartialResults: true,
-    });
+  const [isDuffelLoading, setIsDuffelLoading] = useState(false);
 
-  // Mirror the live transcript into the editable prompt field while listening,
-  // so the user sees their sentence forming in real time (Wispr-Flow style)
-  // and can still edit it after they stop talking.
-  useEffect(() => {
-    if (listening) {
-      setPrompt(transcript);
-    }
-  }, [transcript, listening]);
+  /**
+   * -----------------------------------------
+   * In-App WebView
+   * -----------------------------------------
+   */
+  const [showInAppWebView, setShowInAppWebView] = useState(false);
+  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+  const [isFinalizingDuffelBooking, setIsFinalizingDuffelBooking] =
+    useState(false);
 
-  const handleMicPress = () => {
-    if (listening) {
-      stopListening();
-      if (autoStopTimer.current) clearTimeout(autoStopTimer.current);
-      return;
-    }
-    setPrompt('');
-    startListening();
-    autoStopTimer.current = setTimeout(() => {
-      stopListening();
-    }, MAX_LISTEN_MS);
+  const {
+    isRecording,
+    isPreparingToListen,
+    isTranscribing,
+    text,
+    startRecording,
+    stopRecording,
+    volumeLevel,
+  } = useAudioRecorder(setPrompt);
+
+  const { ref: cardFormRef, createCardForTemporaryUse } =
+    useDuffelCardFormActions();
+
+  const showError = (message: string, title = 'Error') => {
+    MessageToast.error(message, 3000, title);
   };
 
+  const showSuccess = (message: string, title = 'Success') => {
+    MessageToast.success(message, 3000, title);
+  };
+
+  /**
+   * -----------------------------------------
+   * Fetch Duffel Client Key
+   * -----------------------------------------
+   */
   useEffect(() => {
-    return () => {
-      if (autoStopTimer.current) clearTimeout(autoStopTimer.current);
+    const fetchDuffelClientKey = async () => {
+      try {
+        const { data, error } = await supabase.functions.invoke(
+          'duffel-client-key',
+        );
+
+        console.log('DUFFEL CLIENT KEY RESPONSE:', JSON.stringify(data));
+
+        if (error) {
+          console.error('DUFFEL CLIENT KEY ERROR:', error);
+
+          showError(
+            error.message || 'Unable to initialize Duffel checkout.',
+            'Checkout Error',
+          );
+
+          return;
+        }
+
+        const clientKey =
+          data?.clientKey ??
+          data?.component_client_key ??
+          data?.data?.component_client_key ??
+          null;
+
+        if (!clientKey) {
+          console.error('DUFFEL CLIENT KEY MISSING:', data);
+
+          showError(
+            'Duffel checkout could not be initialized.',
+            'Checkout Error',
+          );
+
+          return;
+        }
+
+        setComponentClientKey(clientKey);
+
+        console.log('DUFFEL CLIENT KEY INITIALIZED');
+      } catch (error) {
+        console.error('DUFFEL CLIENT KEY EXCEPTION:', error);
+
+        showError('Unable to initialize Duffel checkout.', 'Checkout Error');
+      }
     };
+
+    fetchDuffelClientKey();
   }, []);
 
+  /**
+   * -----------------------------------------
+   * Microphone
+   * -----------------------------------------
+   */
+  const handleMicPress = async () => {
+    try {
+      if (isRecording) {
+        await stopRecording();
+      } else {
+        setPrompt('');
+        await startRecording();
+      }
+    } catch (error) {
+      console.error('Recording error:', error);
+
+      showError(
+        'Unable to start recording. Please try again.',
+        'Recording Error',
+      );
+    }
+  };
+
+  /**
+   * -----------------------------------------
+   * Parse Booking Intent
+   * -----------------------------------------
+   */
+  const parseTravelIntent = async (
+    travelPrompt: string,
+  ): Promise<TravelIntent | null> => {
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        'parse-booking-intent',
+        {
+          body: {
+            prompt: travelPrompt,
+          },
+        },
+      );
+
+      console.log('PARSE BOOKING INTENT RESPONSE:', data);
+
+      if (error) {
+        console.error('PARSE BOOKING INTENT ERROR:', error);
+
+        if ('context' in error && error.context) {
+          try {
+            const errorBody = await error.context.json();
+
+            console.error('PARSE BOOKING INTENT ERROR BODY:', errorBody);
+
+            showError(
+              errorBody?.error || 'Unable to process your travel request.',
+              errorBody?.code === 'UNSUPPORTED_TRAVEL_REQUEST'
+                ? 'Unsupported Request'
+                : 'Travel Error',
+            );
+          } catch (parseError) {
+            console.error('Could not parse error response:', parseError);
+
+            showError('Unable to process your travel request.', 'Travel Error');
+          }
+        } else {
+          showError(
+            error.message || 'Unable to process your travel request.',
+            'Travel Error',
+          );
+        }
+
+        return null;
+      }
+
+      const response = data as TravelIntentResponse;
+
+      console.log('PARSED BOOKING INTENT:', response);
+
+      if (!response?.success) {
+        showError(
+          response?.error || 'This travel request is not supported.',
+          response?.code === 'UNSUPPORTED_TRAVEL_REQUEST'
+            ? 'Unsupported Request'
+            : 'Travel Error',
+        );
+
+        return null;
+      }
+
+      if (!response.intent) {
+        showError(
+          'Unable to understand your travel request.',
+          'Invalid Request',
+        );
+
+        return null;
+      }
+
+      const validationError = validateTravelIntent(response.intent);
+
+      if (validationError) {
+        showError(validationError, 'Missing Information');
+
+        return null;
+      }
+
+      return response.intent;
+    } catch (error) {
+      console.error('PARSE BOOKING INTENT EXCEPTION:', error);
+
+      showError(
+        'Something went wrong while processing your travel request.',
+        'Travel Error',
+      );
+
+      return null;
+    }
+  };
+
+  /**
+   * -----------------------------------------
+   * Automatically determine booking CTA
+   * from the user's prompt
+   * -----------------------------------------
+   */
+  useEffect(() => {
+    const determineBookingIntent = async () => {
+      const travelPrompt = prompt.trim();
+
+      if (!travelPrompt || isRecording || isTranscribing) {
+        return;
+      }
+
+      const travelIntent = await parseTravelIntent(travelPrompt);
+
+      if (!travelIntent) {
+        return;
+      }
+
+      if (travelIntent.type === 'flight' || travelIntent.type === 'hotel') {
+        setSearchType(travelIntent.type);
+      } else {
+        setSearchType(null);
+      }
+    };
+
+    determineBookingIntent();
+  }, [prompt, isRecording, isTranscribing]);
+
+  /**
+   * -----------------------------------------
+   * Convert FlightOption → SearchResult
+   * -----------------------------------------
+   */
+  const mapFlightToSearchResult = (flight: FlightOption): SearchResult => {
+    const stopText =
+      flight.stops === undefined
+        ? undefined
+        : flight.stops === 0
+        ? 'Non-stop'
+        : `${flight.stops} stop${flight.stops === 1 ? '' : 's'}`;
+
+    const cabinText = flight.cabinClass
+      ? flight.cabinClass.replace(/_/g, ' ')
+      : undefined;
+
+    const metaParts = [
+      `${flight.origin} → ${flight.destination}`,
+      flight.duration,
+      stopText,
+      cabinText,
+    ].filter(Boolean);
+
+    return {
+      title: `${flight.airline} ${flight.flightNumber}`,
+      meta: metaParts.join(' · '),
+      price: `${flight.currency ?? ''} ${flight.price}`.trim(),
+      badges: flight.badge
+        ? [flight.badge]
+        : cabinText
+        ? [cabinText.toUpperCase()]
+        : [],
+    };
+  };
+
+  /**
+   * -----------------------------------------
+   * Convert HotelOption → SearchResult
+   * -----------------------------------------
+   */
+  const mapHotelToSearchResult = (hotel: HotelOption): SearchResult => {
+    const metaParts = [
+      hotel.location,
+      hotel.rating !== undefined ? `${hotel.rating}★` : undefined,
+      hotel.roomType,
+    ].filter(Boolean);
+
+    return {
+      title: hotel.hotelName,
+      meta: metaParts.join(' · '),
+      price: `${hotel.pricePerNight} / night`,
+      badges: hotel.badge ? [hotel.badge] : [],
+    };
+  };
+
+  /**
+   * -----------------------------------------
+   * Search
+   * -----------------------------------------
+   */
   const handleSearch = async () => {
-    if (!prompt.trim()) return;
-    if (listening) stopListening();
+    const travelPrompt = prompt.trim();
+
+    if (!travelPrompt) {
+      showError('Please enter or speak a travel request.', 'Validation');
+
+      return;
+    }
+
+    if (loading) {
+      return;
+    }
+
     setLoading(true);
     setHasSearched(true);
+    setResults([]);
+
     try {
-      const { results: searchResults, error } =
-        await TravelService.searchTravel(
-          prompt,
-          user?.travelPreferences || {
-            seatType: 'aisle',
-            minHotelRating: 4,
-            cabinClass: 'business',
-          },
-        );
-      if (error) {
-        setResults([]);
-      } else {
-        setResults(searchResults);
+      const travelIntent = await parseTravelIntent(travelPrompt);
+
+      if (!travelIntent) {
+        return;
       }
-    } catch (err) {
-      setResults([]);
+
+      if (travelIntent.type === 'flight' || travelIntent.type === 'hotel') {
+        setSearchType(travelIntent.type);
+      } else {
+        setSearchType(null);
+      }
+
+      console.log('VALID TRAVEL INTENT:', JSON.stringify(travelIntent));
+
+      const { data, error } = await supabase.functions.invoke('travel-search', {
+        body: {
+          intent: travelIntent,
+        },
+      });
+
+      console.log('TRAVEL SEARCH RESPONSE:', JSON.stringify(data));
+
+      console.log('TRAVEL SEARCH ERROR:', JSON.stringify(error));
+
+      if (error) {
+        throw error;
+      }
+
+      if (!data?.success) {
+        showError(
+          data?.error || 'Unable to find travel options.',
+          'Travel Search Error',
+        );
+
+        return;
+      }
+
+      const searchResponse = data as TravelSearchResponse;
+
+      if (searchResponse.type === 'flight') {
+        const flightResults = searchResponse.flights.map(
+          mapFlightToSearchResult,
+        );
+
+        setResults(flightResults);
+
+        if (flightResults.length === 0) {
+          showError('No flights were found for your search.', 'No Results');
+        }
+
+        return;
+      }
+
+      if (searchResponse.type === 'hotel') {
+        const hotelResults = searchResponse.hotels.map(mapHotelToSearchResult);
+
+        setResults(hotelResults);
+
+        if (hotelResults.length === 0) {
+          showError('No hotels were found for your search.', 'No Results');
+        }
+
+        return;
+      }
+
+      showError('Unsupported travel search type.', 'Travel Search Error');
+    } catch (error) {
+      console.error('TRAVEL SEARCH EXCEPTION:', error);
+
+      showError(
+        'Something went wrong while processing your travel request.',
+        'Travel Error',
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  const handleBookItem = (title: string, price: string) => {
-    const provider =
-      title.includes('Emirates') || title.includes('Flight')
-        ? 'Amadeus API'
-        : 'Booking.com API';
-    onBook(title, provider, price);
+  /**
+   * -----------------------------------------
+   * Open Duffel Card Form
+   * -----------------------------------------
+   */
+  const handleOpenCardForm = (flight?: FlightOption) => {
+    if (!componentClientKey) {
+      showError(
+        'Checkout is still initializing. Please try again.',
+        'Checkout',
+      );
+
+      return;
+    }
+
+    if (flight) {
+      setSelectedFlight(flight);
+    }
+
+    setCardValid(false);
+    setCreatingCard(false);
+    setCardError(null);
+    setShowCardForm(true);
   };
 
+  /**
+   * -----------------------------------------
+   * Create Temporary Duffel Card
+   * -----------------------------------------
+   */
+  const handleCreateCard = async () => {
+    if (creatingCard) {
+      return;
+    }
+
+    try {
+      setCreatingCard(true);
+      setCardError(null);
+
+      console.log('========================================');
+      console.log('DUFFEL CARD: CONTINUE PRESSED');
+      console.log('========================================');
+
+      console.log('Offer ID:', TEST_DUFFEL_OFFER_ID);
+      console.log('Card valid:', cardValid);
+      console.log('Client key exists:', !!componentClientKey);
+
+      createCardForTemporaryUse();
+
+      console.log('DUFFEL CARD: createCardForTemporaryUse() INVOKED');
+    } catch (error) {
+      console.error('========================================');
+      console.error('DUFFEL CARD: CREATE CARD EXCEPTION');
+      console.error('========================================');
+
+      console.error('Raw error:', error);
+
+      setCreatingCard(false);
+
+      let errorMessage = 'Unable to create the temporary card.';
+
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      } else if (error && typeof error === 'object') {
+        const possibleError = error as unknown as Record<string, unknown>;
+
+        errorMessage = String(
+          possibleError.message ??
+            possibleError.error ??
+            possibleError.detail ??
+            errorMessage,
+        );
+      } else if (typeof error === 'string') {
+        errorMessage = error;
+      }
+
+      console.error('DUFFEL CARD EXCEPTION MESSAGE:', errorMessage);
+
+      setCardError(errorMessage);
+    }
+  };
+
+  /**
+   * -----------------------------------------
+   * Booking
+   * -----------------------------------------
+   */
+  const handleBookItem = (title: string, price: string, index: number) => {
+    if (searchType === 'flight') {
+      handleOpenCardForm();
+
+      return;
+    }
+
+    const provider = 'Duffel Stays';
+
+    setPendingBooking({
+      title,
+      provider,
+      price,
+    });
+  };
+
+  /**
+   * -----------------------------------------
+   * Booking Bridge
+   * -----------------------------------------
+   */
+  const handleBridgeComplete = () => {
+    if (!pendingBooking) {
+      return;
+    }
+
+    onBook(pendingBooking.title, pendingBooking.provider, pendingBooking.price);
+
+    setPendingBooking(null);
+  };
+
+  /**
+   * -----------------------------------------
+   * Open Duffel Checkout In-App
+   * -----------------------------------------
+   */
+  const openDuffelCheckout = async (type: 'flight' | 'hotel') => {
+    if (isDuffelLoading) {
+      return;
+    }
+
+    try {
+      setIsDuffelLoading(true);
+
+      const result = await DuffelCheckoutService.createSession(type);
+
+      if (!result.success || !result.url) {
+        showError(result.error || 'Unable to open Duffel checkout.');
+
+        return;
+      }
+
+      console.log('DUFFEL CHECKOUT URL:', result.url);
+
+      setCheckoutUrl(result.url);
+      setShowInAppWebView(true);
+    } catch (error) {
+      console.error('Error opening Duffel checkout:', error);
+
+      showError('Something went wrong while opening Duffel checkout.');
+    } finally {
+      setIsDuffelLoading(false);
+    }
+  };
+
+  const handleDuffelCheckoutNavigation = async (url: string) => {
+    const callbackPath = '/functions/v1/duffel-checkout-callback';
+
+    if (!url.includes(callbackPath)) {
+      return;
+    }
+
+    // Prevent duplicate callback processing.
+    if (isFinalizingDuffelBooking) {
+      return;
+    }
+
+    try {
+      const callbackUrl = new URL(url);
+
+      const status = callbackUrl.searchParams.get('status');
+
+      const orderId = callbackUrl.searchParams.get('order_id');
+
+      const reference = callbackUrl.searchParams.get('reference');
+
+      console.log('========== DUFFEL CHECKOUT RESULT ==========');
+
+      console.log('STATUS:', status);
+      console.log('ORDER ID:', orderId);
+      console.log('REFERENCE:', reference);
+
+      // =========================================================
+      // SUCCESS
+      // =========================================================
+
+      if (status === 'success') {
+        if (!orderId || !reference) {
+          console.error('Duffel callback missing order_id or reference.');
+
+          setShowInAppWebView(false);
+          setCheckoutUrl(null);
+
+          showError('Unable to finalize your booking.');
+
+          return;
+        }
+
+        setIsFinalizingDuffelBooking(true);
+
+        console.log('Calling duffel-checkout-callback...');
+
+        // The WebView callback URL is intercepted before it loads.
+        // We call the Edge Function directly instead.
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+          },
+        });
+
+        console.log('Duffel callback HTTP status:', response.status);
+
+        const result = await response.json();
+
+        console.log('Duffel callback response:', result);
+
+        if (!response.ok || !result?.success) {
+          console.error('Duffel booking finalization failed:', result);
+
+          setIsFinalizingDuffelBooking(false);
+
+          setShowInAppWebView(false);
+          setCheckoutUrl(null);
+
+          showError(result?.error ?? 'Unable to finalize your booking.');
+
+          return;
+        }
+
+        console.log('========== DUFFEL BOOKING FINALIZED ==========');
+
+        console.log('ORDER ID:', result.order_id);
+
+        console.log('BOOKING REFERENCE:', result.booking_reference);
+
+        console.log('SOURCE:', result.source);
+
+        console.log('DESTINATION:', result.destination);
+
+        // =======================================================
+        // Close WebView ONLY after Edge Function succeeded.
+        // =======================================================
+
+        setIsFinalizingDuffelBooking(false);
+
+        setShowInAppWebView(false);
+        setCheckoutUrl(null);
+
+        showSuccess('Your booking was completed successfully.');
+
+        return;
+      }
+
+      // =========================================================
+      // FAILURE
+      // =========================================================
+
+      if (status === 'failure') {
+        console.log('Duffel checkout failed.');
+
+        setShowInAppWebView(false);
+        setCheckoutUrl(null);
+
+        showError('The booking could not be completed.');
+
+        return;
+      }
+
+      // =========================================================
+      // ABANDONED
+      // =========================================================
+
+      if (status === 'abandoned') {
+        console.log('Duffel checkout abandoned.');
+
+        setShowInAppWebView(false);
+        setCheckoutUrl(null);
+
+        showError('The checkout was cancelled.');
+
+        return;
+      }
+
+      // =========================================================
+      // UNKNOWN
+      // =========================================================
+
+      console.warn('Unknown Duffel callback status:', status);
+
+      setShowInAppWebView(false);
+      setCheckoutUrl(null);
+    } catch (error) {
+      console.error('Error processing Duffel checkout callback:', error);
+
+      setIsFinalizingDuffelBooking(false);
+
+      setShowInAppWebView(false);
+      setCheckoutUrl(null);
+
+      showError('Unable to finalize your booking.');
+    }
+  };
+
+  /**
+   * -----------------------------------------
+   * Cleanup audio timer
+   * -----------------------------------------
+   */
+  useEffect(() => {
+    return () => {
+      if (autoStopTimer.current) {
+        clearTimeout(autoStopTimer.current);
+      }
+    };
+  }, []);
+
+  /**
+   * -----------------------------------------
+   * Transcription → Prompt
+   * -----------------------------------------
+   */
+  useEffect(() => {
+    if (!isRecording && text) {
+      setPrompt(text);
+    }
+  }, [isRecording, text]);
+
+  /**
+   * -----------------------------------------
+   * UI
+   * -----------------------------------------
+   */
   return (
-    <View>
-      <View style={styles.searchBox}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Say or type: 'Flight to Dubai next Tuesday'"
-          placeholderTextColor="#8A95A6"
-          value={prompt}
-          onChangeText={setPrompt}
-          onSubmitEditing={handleSearch}
-          editable={!listening}
-        />
-        {available && (
-          <TouchableOpacity onPress={handleMicPress} style={{ padding: 8 }}>
-            <Text style={{ fontSize: 20 }}>{listening ? '⏹' : '🎙'}</Text>
+    <View style={{ flex: 1 }}>
+      <View
+        style={[
+          styles.searchBox,
+          screenStyles.searchBoxLayout,
+          isRecording && screenStyles.recordingSearchBox,
+        ]}
+      >
+        <View style={screenStyles.inputRow}>
+          <TextInput
+            style={[styles.searchInput, screenStyles.recordingInput]}
+            placeholder={
+              isPreparingToListen
+                ? 'Getting ready to listen...'
+                : isRecording || isTranscribing
+                ? 'Listening...'
+                : "Say or type: 'Flight to Dubai next Tuesday'"
+            }
+            placeholderTextColor="#8A95A6"
+            value={prompt}
+            onChangeText={value => {
+              setPrompt(value);
+
+              if (!value.trim()) {
+                setSearchType(null);
+              }
+            }}
+            onSubmitEditing={handleSearch}
+            editable={!isRecording}
+            returnKeyType="search"
+            multiline
+            numberOfLines={2}
+            textAlignVertical="top"
+          />
+
+          {!isRecording && prompt.trim().length > 0 && (
+            <TouchableOpacity
+              onPress={() => {
+                setPrompt('');
+                setSearchType(null);
+                setSelectedFlight(null);
+              }}
+              style={screenStyles.closeButton}
+              hitSlop={8}
+            >
+              <Ionicons name="close-circle" size={20} color="#8A95A6" />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <View style={screenStyles.bottomRow}>
+          {isRecording ? (
+            <View style={screenStyles.waveformWrapper}>
+              <AudioWaveform volume={volumeLevel} isRecording={isRecording} />
+            </View>
+          ) : (
+            <View style={screenStyles.emptyWaveformSpace} />
+          )}
+
+          <TouchableOpacity
+            onPress={handleMicPress}
+            style={screenStyles.micButton}
+            hitSlop={8}
+          >
+            <Ionicons
+              name={isRecording ? 'stop-circle-outline' : 'mic'}
+              size={isRecording ? 30 : 20}
+              color="#000"
+              style={
+                !isRecording
+                  ? {
+                      marginBottom: 2,
+                    }
+                  : undefined
+              }
+            />
           </TouchableOpacity>
-        )}
+        </View>
       </View>
 
-      {listening && (
-        <Text style={{ color: '#8A95A6', marginBottom: 8 }}>Listening…</Text>
-      )}
-      {!available && (
-        <Text style={{ color: '#8A95A6', marginBottom: 8 }}>
-          Voice input isn't available on this device — you can still type your
-          request.
-        </Text>
-      )}
-
-      <PrimaryButton
-        text={loading ? '✦ Searching flights & hotels...' : '✦ Find options'}
+      {/* <PrimaryButton
+        text={
+          loading
+            ? '✦ Searching...'
+            : searchType === 'flight'
+            ? '✦ Find flights'
+            : searchType === 'hotel'
+            ? '✦ Find hotels'
+            : '✦ Find options'
+        }
         onPress={handleSearch}
         fullWidth
-      />
+        disabled={loading || isRecording || !prompt.trim()}
+      /> */}
+
+      {searchType === 'flight' && (
+        <PrimaryButton
+          text={isDuffelLoading ? '✦ Searching Flights...' : '✦ Find Flights'}
+          onPress={() => openDuffelCheckout('flight')}
+          fullWidth
+          disabled={isDuffelLoading}
+        />
+      )}
+
+      {searchType === 'hotel' && (
+        <PrimaryButton
+          text={isDuffelLoading ? '✦ Searching Hotels...' : '✦ Find Hotels'}
+          onPress={() => openDuffelCheckout('hotel')}
+          fullWidth
+          disabled={isDuffelLoading}
+        />
+      )}
 
       {loading && (
         <ActivityIndicator
           size="large"
           color="#1E293B"
-          style={{ marginVertical: 16 }}
+          style={{
+            marginVertical: 16,
+          }}
         />
       )}
 
-      {!loading && hasSearched && results.length === 0 && (
-        <Text style={{ marginTop: 16, color: '#8A95A6' }}>
-          No matching flights or hotels found — try adjusting your request.
-        </Text>
-      )}
+      {!loading &&
+        results.map((item, idx) => (
+          <ResultCard
+            key={`${item.title}-${idx}`}
+            title={item.title}
+            meta={item.meta}
+            price={item.price}
+            badges={item.badges}
+            onPress={() => handleBookItem(item.title, item.price, idx)}
+          />
+        ))}
 
-      {results.map((item, idx) => (
-        <ResultCard
-          key={idx}
-          title={item.title}
-          meta={item.meta}
-          price={item.price}
-          badges={item.badges}
-          onPress={() => handleBookItem(item.title, item.price)}
-        />
-      ))}
+      <BookingBridge
+        visible={!!pendingBooking}
+        title={pendingBooking?.title ?? ''}
+        onComplete={handleBridgeComplete}
+      />
+
+      {/* ---------------------------------- */}
+      {/* In-App WebView */}
+      {/* ---------------------------------- */}
+
+      <InAppWebView
+        visible={showInAppWebView}
+        url={checkoutUrl}
+        title={searchType === 'hotel' ? 'Hotel Checkout' : 'Flight Checkout'}
+        onNavigationStateChange={url => handleDuffelCheckoutNavigation(url)}
+        onClose={() => {
+          setShowInAppWebView(false);
+          setCheckoutUrl(null);
+        }}
+      />
+
+      {/* ---------------------------------- */}
+      {/* Duffel Card Modal */}
+      {/* ---------------------------------- */}
+
+      <Modal
+        visible={showCardForm}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          if (!creatingCard) {
+            setShowCardForm(false);
+          }
+        }}
+      >
+        <View style={screenStyles.modalOverlay}>
+          <View style={screenStyles.cardModal}>
+            {/* Modal drag indicator */}
+            <View style={screenStyles.modalHandle} />
+
+            <ScrollView
+              style={screenStyles.cardScrollView}
+              contentContainerStyle={screenStyles.cardScrollContent}
+              showsVerticalScrollIndicator={true}
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled={true}
+            >
+              {/* Header */}
+              <View style={screenStyles.cardHeader}>
+                <View style={screenStyles.cardHeaderText}>
+                  <View style={screenStyles.paymentIconContainer}>
+                    <Ionicons name="card-outline" size={22} color="#111827" />
+                  </View>
+
+                  <View style={screenStyles.paymentHeaderCopy}>
+                    <Text style={screenStyles.cardTitle}>Payment details</Text>
+
+                    <Text style={screenStyles.cardSubtitle}>
+                      Securely enter your card information
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  onPress={() => {
+                    if (!creatingCard) {
+                      setShowCardForm(false);
+                    }
+                  }}
+                  style={screenStyles.cardCloseButton}
+                  hitSlop={8}
+                >
+                  <Ionicons name="close" size={22} color="#374151" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Selected offer */}
+              <View style={screenStyles.offerInfo}>
+                <View style={screenStyles.offerIconContainer}>
+                  <Ionicons name="airplane-outline" size={20} color="#111827" />
+                </View>
+
+                <View style={screenStyles.offerInfoContent}>
+                  <Text style={screenStyles.offerInfoTitle}>
+                    Flight selected
+                  </Text>
+
+                  <Text style={screenStyles.offerInfoText}>
+                    {selectedFlight
+                      ? `${selectedFlight.airline} ${selectedFlight.flightNumber}`
+                      : 'Test Duffel offer'}
+                  </Text>
+
+                  <View style={screenStyles.offerIdRow}>
+                    <Text style={screenStyles.offerIdLabel}>Offer ID</Text>
+
+                    <Text style={screenStyles.offerIdValue} numberOfLines={1}>
+                      {TEST_DUFFEL_OFFER_ID}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Card section */}
+              <View style={screenStyles.cardSection}>
+                <Text style={screenStyles.sectionLabel}>CARD INFORMATION</Text>
+
+                <View style={screenStyles.cardFormContainer}>
+                  {cardError && (
+                    <View style={screenStyles.cardError}>
+                      <View style={screenStyles.cardErrorIcon}>
+                        <Ionicons
+                          name="alert-circle-outline"
+                          size={20}
+                          color="#B42318"
+                        />
+                      </View>
+
+                      <View style={screenStyles.cardErrorContent}>
+                        <Text style={screenStyles.cardErrorTitle}>
+                          Payment error
+                        </Text>
+
+                        <Text style={screenStyles.cardErrorText}>
+                          {cardError}
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {!componentClientKey ? (
+                    <View style={screenStyles.cardLoading}>
+                      <View style={screenStyles.loadingIconContainer}>
+                        <ActivityIndicator size="small" color="#111827" />
+                      </View>
+
+                      <Text style={screenStyles.cardLoadingTitle}>
+                        Initializing checkout
+                      </Text>
+
+                      <Text style={screenStyles.cardLoadingText}>
+                        Preparing secure payment fields...
+                      </Text>
+                    </View>
+                  ) : (
+                    <>
+                      <View style={screenStyles.duffelFieldsContainer}>
+                        <DuffelCardForm
+                          ref={cardFormRef}
+                          clientKey={componentClientKey}
+                          intent="to-create-card-for-temporary-use"
+                          onValidateSuccess={() => {
+                            console.log('DUFFEL CARD FORM VALID');
+
+                            setCardValid(true);
+
+                            setCardError(null);
+                          }}
+                          onValidateFailure={() => {
+                            console.log('DUFFEL CARD FORM INVALID');
+
+                            setCardValid(false);
+                          }}
+                          onCreateCardForTemporaryUseSuccess={card => {
+                            console.log(
+                              'DUFFEL TEMPORARY CARD CREATED:',
+                              JSON.stringify(card),
+                            );
+
+                            console.log('DUFFEL CARD ID:', card.id);
+
+                            console.log(
+                              'DUFFEL OFFER ID:',
+                              TEST_DUFFEL_OFFER_ID,
+                            );
+
+                            setCreatingCard(false);
+
+                            showError(
+                              `Card created successfully.\n\nCard ID: ${card.id}`,
+                              'Duffel Card Test',
+                            );
+
+                            setShowCardForm(false);
+                          }}
+                          onCreateCardForTemporaryUseFailure={error => {
+                            console.error(
+                              'DUFFEL CARD CREATION FAILURE:',
+                              error,
+                            );
+
+                            setCreatingCard(false);
+
+                            const errorObject = error as unknown as Record<
+                              string,
+                              unknown
+                            >;
+
+                            console.error(
+                              'DUFFEL CARD CREATION FAILURE DETAILS:',
+                              JSON.stringify(errorObject, null, 2),
+                            );
+
+                            const errorMessage =
+                              typeof errorObject?.message === 'string'
+                                ? errorObject.message
+                                : typeof errorObject?.error === 'string'
+                                ? errorObject.error
+                                : typeof errorObject?.detail === 'string'
+                                ? errorObject.detail
+                                : 'Unable to create the temporary card.';
+
+                            setCardError(errorMessage);
+                          }}
+                          styles={{
+                            input: {
+                              color: '#111827',
+                              fontSize: 16,
+                            },
+
+                            label: {
+                              color: '#374151',
+                              fontWeight: '600',
+                            },
+
+                            errorMessage: {
+                              color: '#B42318',
+                            },
+
+                            formField: {
+                              marginBottom: 16,
+                            },
+
+                            formContainer: {
+                              gap: 12,
+                            },
+
+                            sectionTitle: {
+                              fontSize: 18,
+                              fontWeight: '700',
+                            },
+                          }}
+                        />
+                      </View>
+
+                      <View style={screenStyles.securityNote}>
+                        <Ionicons
+                          name="lock-closed-outline"
+                          size={15}
+                          color="#6B7280"
+                        />
+
+                        <Text style={screenStyles.securityText}>
+                          Your payment information is securely processed.
+                        </Text>
+                      </View>
+
+                      <View style={screenStyles.continueButtonContainer}>
+                        <PrimaryButton
+                          text={creatingCard ? '✦ Processing...' : '✦ Continue'}
+                          onPress={handleCreateCard}
+                          fullWidth
+                          disabled={!cardValid || creatingCard}
+                        />
+                      </View>
+                    </>
+                  )}
+                </View>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
+
+const screenStyles = StyleSheet.create({
+  searchBoxLayout: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    justifyContent: 'center',
+    paddingVertical: 8,
+  },
+
+  recordingSearchBox: {
+    minHeight: 130,
+    paddingVertical: 10,
+  },
+
+  inputRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 44,
+  },
+
+  recordingInput: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 60,
+  },
+
+  closeButton: {
+    width: 36,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 2,
+    flexShrink: 0,
+  },
+
+  bottomRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 56,
+    marginTop: 4,
+  },
+
+  waveformWrapper: {
+    flex: 1,
+    height: 56,
+    justifyContent: 'center',
+    alignItems: 'stretch',
+    overflow: 'hidden',
+    minWidth: 0,
+  },
+
+  emptyWaveformSpace: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  micButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+    flexShrink: 0,
+  },
+
+  /* -----------------------------------------
+   * CARD MODAL
+   * ----------------------------------------- */
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.48)',
+    justifyContent: 'flex-end',
+  },
+
+  cardModal: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 24,
+    maxHeight: '94%',
+    shadowOpacity: 0.18,
+    shadowRadius: 20,
+    shadowOffset: {
+      width: 0,
+      height: -8,
+    },
+    elevation: 20,
+  },
+
+  modalHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#D1D5DB',
+    marginBottom: 18,
+  },
+
+  cardScrollView: {
+    flexGrow: 0,
+  },
+
+  cardScrollContent: {
+    paddingBottom: 8,
+  },
+
+  /* -----------------------------------------
+   * CARD HEADER
+   * ----------------------------------------- */
+
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+
+  cardHeaderText: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: 12,
+  },
+
+  paymentIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 13,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+
+  paymentHeaderCopy: {
+    flex: 1,
+  },
+
+  cardTitle: {
+    fontSize: 21,
+    fontWeight: '700',
+    color: '#111827',
+    letterSpacing: -0.3,
+  },
+
+  cardSubtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#6B7280',
+  },
+
+  cardCloseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  /* -----------------------------------------
+   * SELECTED OFFER
+   * ----------------------------------------- */
+
+  offerInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 22,
+  },
+
+  offerIconContainer: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+
+  offerInfoContent: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  offerInfoTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#6B7280',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 3,
+  },
+
+  offerInfoText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+    marginTop: 1,
+  },
+
+  offerIdRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+  },
+
+  offerIdLabel: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    marginRight: 6,
+  },
+
+  offerIdValue: {
+    flex: 1,
+    fontSize: 10,
+    color: '#9CA3AF',
+  },
+
+  /* -----------------------------------------
+   * CARD SECTION
+   * ----------------------------------------- */
+
+  cardSection: {
+    width: '100%',
+  },
+
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#6B7280',
+    letterSpacing: 0.8,
+    marginBottom: 10,
+  },
+
+  cardFormContainer: {
+    width: '100%',
+  },
+
+  duffelFieldsContainer: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    padding: 14,
+    overflow: 'hidden',
+  },
+
+  /* -----------------------------------------
+   * ERROR
+   * ----------------------------------------- */
+
+  cardError: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FEF3F2',
+    borderWidth: 1,
+    borderColor: '#FDA29B',
+    borderRadius: 14,
+    padding: 13,
+    marginBottom: 16,
+  },
+
+  cardErrorIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 9,
+  },
+
+  cardErrorContent: {
+    flex: 1,
+  },
+
+  cardErrorTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#B42318',
+    marginBottom: 3,
+  },
+
+  cardErrorText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#B42318',
+  },
+
+  /* -----------------------------------------
+   * LOADING
+   * ----------------------------------------- */
+
+  cardLoading: {
+    minHeight: 220,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 16,
+    paddingHorizontal: 20,
+  },
+
+  loadingIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+
+  cardLoadingTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+  },
+
+  cardLoadingText: {
+    marginTop: 5,
+    fontSize: 13,
+    color: '#6B7280',
+  },
+
+  /* -----------------------------------------
+   * SECURITY NOTE
+   * ----------------------------------------- */
+
+  securityNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 14,
+    paddingHorizontal: 8,
+  },
+
+  securityText: {
+    marginLeft: 6,
+    fontSize: 11,
+    color: '#6B7280',
+  },
+
+  /* -----------------------------------------
+   * CONTINUE
+   * ----------------------------------------- */
+
+  continueButtonContainer: {
+    marginTop: 16,
+    marginBottom: 4,
+  },
+});

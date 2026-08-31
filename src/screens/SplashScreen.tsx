@@ -7,9 +7,11 @@ import {
   Dimensions,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  Image,
 } from 'react-native';
 import styles from '../styles/styles';
 import { PrimaryButton, LinkText } from '../components';
+import logo from '../assets/images/ic_logo.png';
 
 const { width } = Dimensions.get('window');
 
@@ -67,10 +69,20 @@ export function SplashScreen({ onStart, onSkip }: SplashScreenProps) {
               },
             ]}
           >
-            <View style={styles.brandBadgeLarge}>
-              <Text style={styles.brandBadgeTextLarge}>{slide.icon}</Text>
-            </View>
+            {index === 0 ? (
+              <Image
+                source={logo}
+                style={styles.brandLogo}
+                resizeMode="contain"
+              />
+            ) : (
+              <View style={styles.brandBadgeLarge}>
+                <Text style={styles.brandBadgeTextLarge}>{slide.icon}</Text>
+              </View>
+            )}
+
             <Text style={styles.brandTitleLarge}>{slide.title}</Text>
+
             <Text style={styles.brandSubtitleLarge}>{slide.subtitle}</Text>
           </View>
         ))}
@@ -100,7 +112,7 @@ export function SplashScreen({ onStart, onSkip }: SplashScreenProps) {
       {/* CTAs pinned at bottom */}
       <View style={styles.splashActions}>
         <PrimaryButton text="Get started →" onPress={onStart} large />
-        <LinkText text="Skip to demo" onPress={onSkip} variant="primary" />
+        {/* <LinkText text="Skip to demo" onPress={onSkip} variant="primary" /> */}
       </View>
     </View>
   );

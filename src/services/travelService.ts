@@ -1,6 +1,12 @@
 import { ENV, isConfigured } from '../config/env';
 import { AIService } from './aiService';
-import { TravelPreferences, FlightOption, HotelOption, BookingRecord, SearchResult } from '../types';
+import {
+  TravelPreferences,
+  FlightOption,
+  HotelOption,
+  BookingRecord,
+  SearchResult,
+} from '../types';
 
 export class TravelService {
   /**
@@ -8,8 +14,13 @@ export class TravelService {
    */
   static async searchTravel(
     userPrompt: string,
-    preferences: TravelPreferences
-  ): Promise<{ results: SearchResult[]; flights: FlightOption[]; hotels: HotelOption[]; error: string | null }> {
+    preferences: TravelPreferences,
+  ): Promise<{
+    results: SearchResult[];
+    flights: FlightOption[];
+    hotels: HotelOption[];
+    error: string | null;
+  }> {
     try {
       // Step 1: Natural language intent parsing
       const intent = await AIService.parseTravelIntent(userPrompt);
@@ -21,9 +32,13 @@ export class TravelService {
       ]);
 
       const flights: FlightOption[] =
-        flightResult.status === 'fulfilled' ? flightResult.value : this.getFallbackFlights(intent, preferences);
+        flightResult.status === 'fulfilled'
+          ? flightResult.value
+          : this.getFallbackFlights(intent, preferences);
       const hotels: HotelOption[] =
-        hotelResult.status === 'fulfilled' ? hotelResult.value : this.getFallbackHotels(intent, preferences);
+        hotelResult.status === 'fulfilled'
+          ? hotelResult.value
+          : this.getFallbackHotels(intent, preferences);
 
       // Step 3: Personalized Filtering — top 2-3 tailored picks
       const formattedResults: SearchResult[] = [
@@ -31,13 +46,17 @@ export class TravelService {
           title: `${f.airline} · ${f.cabinClass}`,
           meta: `${f.origin} ✈️ ${f.destination} · ${f.departureTime}`,
           price: f.price,
-          badges: f.badge ? [f.badge, `${preferences.seatType.toUpperCase()} SEAT`] : [`${preferences.seatType.toUpperCase()} SEAT`],
+          badges: f.badge
+            ? [f.badge, `${preferences.seatType.toUpperCase()} SEAT`]
+            : [`${preferences.seatType.toUpperCase()} SEAT`],
         })),
         ...hotels.map(h => ({
           title: h.hotelName,
           meta: `${h.rating}★ · ${h.roomType} · ${h.location}`,
           price: h.pricePerNight,
-          badges: h.badge ? [h.badge, 'FREE CANCELLATION'] : ['MATCHES PREFERENCES'],
+          badges: h.badge
+            ? [h.badge, 'FREE CANCELLATION']
+            : ['MATCHES PREFERENCES'],
         })),
       ];
 
@@ -64,7 +83,7 @@ export class TravelService {
     item: string,
     provider: string,
     price: string,
-    autoBook: boolean = false
+    autoBook: boolean = false,
   ): Promise<BookingRecord> {
     const booking: BookingRecord = {
       id: `bk_${Date.now()}`,
@@ -73,16 +92,24 @@ export class TravelService {
       title: item,
       provider: provider,
       price: price,
-      subtitle: autoBook ? 'Auto-booked via pre-authorized card' : `Booked via ${provider}`,
+      subtitle: autoBook
+        ? 'Auto-booked via pre-authorized card'
+        : `Booked via ${provider}`,
       status: 'confirmed',
-      confirmationCode: `ATL-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
+      confirmationCode: `ATL-${Math.random()
+        .toString(36)
+        .substring(2, 8)
+        .toUpperCase()}`,
       createdAt: new Date().toISOString(),
     };
 
     return booking;
   }
 
-  private static async fetchFlights(intent: any, prefs: TravelPreferences): Promise<FlightOption[]> {
+  private static async fetchFlights(
+    intent: any,
+    prefs: TravelPreferences,
+  ): Promise<FlightOption[]> {
     if (!isConfigured('AMADEUS_API_KEY')) {
       return this.getFallbackFlights(intent, prefs);
     }
@@ -90,7 +117,10 @@ export class TravelService {
     return this.getFallbackFlights(intent, prefs);
   }
 
-  private static async fetchHotels(intent: any, prefs: TravelPreferences): Promise<HotelOption[]> {
+  private static async fetchHotels(
+    intent: any,
+    prefs: TravelPreferences,
+  ): Promise<HotelOption[]> {
     if (!isConfigured('AMADEUS_API_KEY')) {
       return this.getFallbackHotels(intent, prefs);
     }
@@ -98,8 +128,14 @@ export class TravelService {
     return this.getFallbackHotels(intent, prefs);
   }
 
-  private static getFallbackFlights(intent: any, prefs: TravelPreferences): FlightOption[] {
-    const seatLabel = prefs.seatType === 'aisle' ? 'Aisle seat auto-selected' : 'Window seat requested';
+  private static getFallbackFlights(
+    intent: any,
+    prefs: TravelPreferences,
+  ): FlightOption[] {
+    const seatLabel =
+      prefs.seatType === 'aisle'
+        ? 'Aisle seat auto-selected'
+        : 'Window seat requested';
     return [
       {
         id: 'fl_1',
@@ -110,7 +146,9 @@ export class TravelService {
         departureTime: '8:30 AM',
         arrivalTime: '4:45 PM',
         price: '$1,240',
-        cabinClass: prefs.cabinClass ? prefs.cabinClass.replace('_', ' ') : 'Business Class',
+        cabinClass: prefs.cabinClass
+          ? prefs.cabinClass.replace('_', ' ')
+          : 'Business Class',
         badge: seatLabel,
       },
       {
@@ -128,7 +166,10 @@ export class TravelService {
     ];
   }
 
-  private static getFallbackHotels(intent: any, prefs: TravelPreferences): HotelOption[] {
+  private static getFallbackHotels(
+    intent: any,
+    prefs: TravelPreferences,
+  ): HotelOption[] {
     const minStars = prefs.minHotelRating || 4;
     return [
       {
