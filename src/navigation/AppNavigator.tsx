@@ -355,14 +355,15 @@ function ConfirmScreenContainer({
   navigation,
 }: ConfirmScreenWrapperProps) {
   const confirmation = route.params.confirmation;
+  const booking = route.params.booking;
 
   return (
     <MainLayout
-      title="Confirmed"
-      subtitle="Your booking is ready"
+      title="Booking Details"
+      subtitle="Your booking status"
       onBack={() => navigation.goBack()}
     >
-      <ConfirmScreen confirmation={confirmation} />
+      <ConfirmScreen confirmation={confirmation} booking={booking} />
     </MainLayout>
   );
 }

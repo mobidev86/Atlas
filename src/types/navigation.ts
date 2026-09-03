@@ -1,3 +1,4 @@
+import { UserBooking } from '../components/BookingCard';
 import { AuthMode, ConfirmationState } from './index';
 
 export type MainTabParamList = {
@@ -15,5 +16,8 @@ export type RootStackParamList = {
   Onboard: undefined;
   MainTabs: { screen?: keyof MainTabParamList } | undefined;
   Reply: undefined;
-  Confirm: { confirmation: ConfirmationState };
+  Confirm: {
+    confirmation: ConfirmationState;
+    booking: UserBooking;
+  };
 };

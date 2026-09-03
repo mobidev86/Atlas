@@ -1,12 +1,33 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const DUFFEL_API_URL = 'https://api.duffel.com';
+Deno.serve(async req => {
+  console.log('========== DUFFEL CHECKOUT CALLBACK HIT ==========');
+  console.log('METHOD:', req.method);
+  console.log('URL:', req.url);
 
-Deno.serve(async (req: Request) => {
+  // =========================================================
+  // CORS
+  // =========================================================
+
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers':
+      'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Content-Type': 'application/json',
+  };
+
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', {
+      status: 200,
+      headers: corsHeaders,
+    });
+  }
+
   try {
-    // =========================================================
-    // Read Duffel callback URL
-    // =========================================================
+    // =======================================================
+    // 1. READ CALLBACK PARAMETERS
+    // =======================================================
 
     const url = new URL(req.url);
 
@@ -14,613 +35,413 @@ Deno.serve(async (req: Request) => {
     const orderId = url.searchParams.get('order_id');
     const reference = url.searchParams.get('reference');
 
-    console.log('========== DUFFEL CHECKOUT CALLBACK ==========');
+    console.log('Callback status:', status);
+    console.log('Callback order_id:', orderId);
+    console.log('Callback reference:', reference);
 
-    console.log('METHOD:', req.method);
-    console.log('STATUS:', status);
-    console.log('ORDER ID:', orderId);
-    console.log('REFERENCE:', reference);
+    // =======================================================
+    // 2. HANDLE NON-SUCCESS CALLBACKS
+    // =======================================================
 
-    // =========================================================
-    // SUCCESS
-    // =========================================================
+    if (status !== 'success') {
+      console.log('Checkout did not complete successfully.', 'status:', status);
 
-    if (status === 'success') {
-      // -------------------------------------------------------
-      // Validate callback parameters
-      // -------------------------------------------------------
+      return new Response(
+        JSON.stringify({
+          success: false,
+          status,
+          message: 'Duffel checkout was not completed successfully.',
+        }),
+        {
+          status: 200,
+          headers: corsHeaders,
+        },
+      );
+    }
 
-      if (!orderId || !reference) {
+    // =======================================================
+    // 3. VALIDATE REQUIRED PARAMETERS
+    // =======================================================
+
+    if (!orderId) {
+      console.error('Missing order_id');
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: 'Missing order_id',
+        }),
+        {
+          status: 400,
+          headers: corsHeaders,
+        },
+      );
+    }
+
+    if (!reference) {
+      console.error('Missing reference');
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: 'Missing reference',
+        }),
+        {
+          status: 400,
+          headers: corsHeaders,
+        },
+      );
+    }
+
+    // =======================================================
+    // 4. PARSE ATLAS REFERENCE
+    //
+    // Expected:
+    //
+    // ATLAS_FLIGHT_<user_id>_<uuid>
+    // ATLAS_HOTEL_<user_id>_<uuid>
+    //
+    // =======================================================
+
+    let bookingType: 'flight' | 'hotel';
+    let userId: string;
+
+    if (reference.startsWith('ATLAS_FLIGHT_')) {
+      bookingType = 'flight';
+
+      const remainder = reference.substring('ATLAS_FLIGHT_'.length);
+
+      const separatorIndex = remainder.indexOf('_');
+
+      if (separatorIndex === -1) {
+        throw new Error('Invalid ATLAS_FLIGHT reference format.');
+      }
+
+      userId = remainder.substring(0, separatorIndex);
+    } else if (reference.startsWith('ATLAS_HOTEL_')) {
+      bookingType = 'hotel';
+
+      const remainder = reference.substring('ATLAS_HOTEL_'.length);
+
+      const separatorIndex = remainder.indexOf('_');
+
+      if (separatorIndex === -1) {
+        throw new Error('Invalid ATLAS_HOTEL reference format.');
+      }
+
+      userId = remainder.substring(0, separatorIndex);
+    } else {
+      throw new Error(`Unknown booking reference format: ${reference}`);
+    }
+
+    console.log('Booking type:', bookingType);
+    console.log('User ID:', userId);
+
+    // =======================================================
+    // 5. GET SUPABASE CONFIGURATION
+    // =======================================================
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+
+    if (!supabaseUrl) {
+      throw new Error('SUPABASE_URL is not configured.');
+    }
+
+    const supabaseSecretKeysRaw = Deno.env.get('SUPABASE_SECRET_KEYS');
+
+    if (!supabaseSecretKeysRaw) {
+      throw new Error('SUPABASE_SECRET_KEYS is not configured.');
+    }
+
+    let supabaseSecretKey: string | null = null;
+
+    try {
+      const parsed = JSON.parse(supabaseSecretKeysRaw);
+
+      supabaseSecretKey =
+        parsed?.default ?? parsed?.service_role ?? parsed?.serviceRole ?? null;
+    } catch (error) {
+      console.error('Failed to parse SUPABASE_SECRET_KEYS:', error);
+    }
+
+    if (!supabaseSecretKey) {
+      throw new Error('Unable to resolve Supabase secret key.');
+    }
+
+    // =======================================================
+    // 6. CREATE ADMIN SUPABASE CLIENT
+    // =======================================================
+
+    const supabaseAdmin = createClient(supabaseUrl, supabaseSecretKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    });
+
+    // =======================================================
+    // 7. FETCH USER PROFILE
+    // =======================================================
+
+    console.log('Fetching profile:', userId);
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('full_name')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (profileError) {
+      console.error('Failed to fetch profile:', profileError);
+
+      throw new Error(`Failed to fetch profile: ${profileError.message}`);
+    }
+
+    if (!profile) {
+      throw new Error(`No profile found for user ${userId}`);
+    }
+
+    const fullName = profile.full_name;
+
+    console.log('Profile full name:', fullName);
+
+    // =======================================================
+    // 8. CHECK WHETHER THIS ORDER ALREADY EXISTS
+    // =======================================================
+
+    console.log('Checking existing user_bookings row:', orderId);
+
+    const { data: existingBooking, error: existingError } = await supabaseAdmin
+      .from('user_bookings')
+      .select('*')
+      .eq('booking_id', orderId)
+      .maybeSingle();
+
+    if (existingError) {
+      console.error('Failed checking existing booking:', existingError);
+
+      throw new Error(
+        `Failed checking existing booking: ${existingError.message}`,
+      );
+    }
+
+    let userBooking = existingBooking;
+
+    // =======================================================
+    // 9. CREATE INITIAL BOOKING ROW IF NEEDED
+    //
+    // At this point we intentionally do NOT know the Duffel
+    // booking reference / PNR yet.
+    //
+    // duffel-flight-booking will retrieve it and update
+    // this SAME row.
+    // =======================================================
+
+    if (!existingBooking) {
+      console.log('Creating initial user_bookings row...');
+
+      const { data: insertedBooking, error: insertError } = await supabaseAdmin
+        .from('user_bookings')
+        .insert({
+          user_id: userId,
+          booking_type: bookingType,
+          booking_id: orderId,
+          booking_reference: null,
+          status: 'processing',
+          fullName,
+        })
+        .select('*')
+        .single();
+
+      if (insertError) {
+        console.error('Failed to create user_booking:', insertError);
+
+        throw new Error(
+          `Failed to create user_booking: ${insertError.message}`,
+        );
+      }
+
+      userBooking = insertedBooking;
+
+      console.log('Initial user_booking created:', userBooking);
+    } else {
+      console.log('user_booking already exists:', existingBooking);
+    }
+
+    // =======================================================
+    // 10. FLIGHT BOOKING
+    //
+    // Call duffel-flight-booking SERVER-TO-SERVER.
+    //
+    // IMPORTANT:
+    // The callback passes:
+    //
+    // {
+    //   order_id,
+    //   user_id
+    // }
+    //
+    // duffel-flight-booking will:
+    //   - retrieve the Duffel order
+    //   - extract booking details
+    //   - update the SAME user_bookings row
+    // =======================================================
+
+    if (bookingType === 'flight') {
+      console.log('Calling duffel-flight-booking...');
+
+      const flightBookingUrl = `${supabaseUrl}/functions/v1/duffel-flight-booking`;
+
+      const flightBookingResponse = await fetch(flightBookingUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+
+          // Authenticate the internal Edge Function call.
+          Authorization: `Bearer ${supabaseSecretKey}`,
+          apikey: supabaseSecretKey,
+        },
+        body: JSON.stringify({
+          order_id: orderId,
+          user_id: userId,
+        }),
+      });
+
+      const flightBookingText = await flightBookingResponse.text();
+
+      let flightBookingData: any = null;
+
+      try {
+        flightBookingData = JSON.parse(flightBookingText);
+      } catch {
+        flightBookingData = {
+          raw: flightBookingText,
+        };
+      }
+
+      console.log(
+        'duffel-flight-booking HTTP status:',
+        flightBookingResponse.status,
+      );
+
+      console.log('duffel-flight-booking response:', flightBookingData);
+
+      // =====================================================
+      // 11. HANDLE DOWNSTREAM BOOKING FAILURE
+      // =====================================================
+
+      if (!flightBookingResponse.ok) {
         console.error(
-          'Missing order_id or reference in successful Duffel callback.',
+          'duffel-flight-booking returned HTTP error:',
+          flightBookingResponse.status,
+          flightBookingData,
         );
 
         return new Response(
           JSON.stringify({
             success: false,
-            status: 'success',
-            error: 'Required booking information was not returned by Duffel.',
-          }),
-          {
-            status: 400,
-            headers: {
-              'Content-Type': 'application/json; charset=utf-8',
-              'Cache-Control': 'no-store',
-            },
-          },
-        );
-      }
-
-      // =======================================================
-      // Parse Atlas reference
-      //
-      // Expected:
-      //
-      // ATLAS_FLIGHT_<user_id>_<uuid>
-      // ATLAS_HOTEL_<user_id>_<uuid>
-      // =======================================================
-
-      const referenceParts = reference.split('_');
-
-      if (referenceParts.length < 4) {
-        throw new Error(`Invalid Atlas booking reference: ${reference}`);
-      }
-
-      const atlasPrefix = referenceParts[0];
-
-      const bookingTypeFromReference = referenceParts[1]?.toLowerCase();
-
-      const userId = referenceParts[2];
-
-      if (atlasPrefix !== 'ATLAS') {
-        throw new Error(`Invalid Atlas reference prefix: ${reference}`);
-      }
-
-      if (
-        bookingTypeFromReference !== 'flight' &&
-        bookingTypeFromReference !== 'hotel'
-      ) {
-        throw new Error(`Invalid booking type in reference: ${reference}`);
-      }
-
-      if (!userId) {
-        throw new Error(
-          `Unable to determine user ID from reference: ${reference}`,
-        );
-      }
-
-      console.log('BOOKING TYPE:', bookingTypeFromReference);
-
-      console.log('USER ID:', userId);
-
-      // =======================================================
-      // Environment variables
-      // =======================================================
-
-      const supabaseUrl = Deno.env.get('SUPABASE_URL');
-
-      const supabaseSecretKeysRaw = Deno.env.get('SUPABASE_SECRET_KEYS');
-
-      const duffelApiKey = Deno.env.get('DUFFEL_API_KEY');
-
-      if (!supabaseUrl) {
-        throw new Error('SUPABASE_URL is not configured.');
-      }
-
-      if (!supabaseSecretKeysRaw) {
-        throw new Error('SUPABASE_SECRET_KEYS is not configured.');
-      }
-
-      if (!duffelApiKey) {
-        throw new Error('DUFFEL_API_KEY is not configured.');
-      }
-
-      // =======================================================
-      // Resolve Supabase secret key
-      // =======================================================
-
-      let supabaseSecretKey: string | null = null;
-
-      try {
-        const secretKeys = JSON.parse(supabaseSecretKeysRaw);
-
-        supabaseSecretKey = secretKeys?.default ?? null;
-      } catch (error) {
-        console.error('Unable to parse SUPABASE_SECRET_KEYS:', error);
-
-        throw new Error('Unable to parse Supabase secret keys.');
-      }
-
-      if (!supabaseSecretKey) {
-        throw new Error('Default Supabase secret key is not configured.');
-      }
-
-      console.log('Supabase default secret key resolved successfully.');
-
-      // =======================================================
-      // Supabase admin client
-      // =======================================================
-
-      const supabaseAdmin = createClient(supabaseUrl, supabaseSecretKey);
-
-      // =======================================================
-      // Retrieve user profile
-      //
-      // profiles:
-      //
-      // full_name
-      //
-      // user_bookings:
-      //
-      // "fullName"
-      // =======================================================
-
-      console.log('Retrieving user profile...');
-
-      const { data: profile, error: profileError } = await supabaseAdmin
-        .from('profiles')
-        .select('full_name')
-        .eq('id', userId)
-        .single();
-
-      if (profileError) {
-        console.error('Unable to fetch profile:', profileError);
-
-        throw new Error(
-          `Unable to fetch user profile: ${profileError.message}`,
-        );
-      }
-
-      const fullName = profile?.full_name;
-
-      if (!fullName) {
-        throw new Error('User profile does not contain full_name.');
-      }
-
-      console.log('USER PROFILE FOUND:', fullName);
-
-      // =======================================================
-      // Booking details
-      // =======================================================
-
-      let source: string | null = null;
-
-      let destination: string | null = null;
-
-      let bookingReference: string | null = null;
-
-      // =======================================================
-      // FLIGHT
-      // =======================================================
-
-      if (bookingTypeFromReference === 'flight') {
-        console.log('Retrieving Duffel flight order:', orderId);
-
-        const duffelOrderResponse = await fetch(
-          `${DUFFEL_API_URL}/air/orders/${encodeURIComponent(orderId)}`,
-          {
-            method: 'GET',
-
-            headers: {
-              Accept: 'application/json',
-
-              'Accept-Encoding': 'gzip',
-
-              'Duffel-Version': 'v2',
-
-              Authorization: `Bearer ${duffelApiKey}`,
-            },
-          },
-        );
-
-        const responseText = await duffelOrderResponse.text();
-
-        let duffelOrderData: any | null = null;
-
-        try {
-          duffelOrderData = JSON.parse(responseText);
-        } catch {
-          duffelOrderData = null;
-        }
-
-        if (!duffelOrderResponse.ok) {
-          console.error('Duffel order retrieval failed:', {
-            status: duffelOrderResponse.status,
-
-            response: duffelOrderData ?? responseText,
-          });
-
-          throw new Error(
-            `Duffel order retrieval failed with status ${duffelOrderResponse.status}.`,
-          );
-        }
-
-        const order = duffelOrderData?.data;
-
-        if (!order) {
-          throw new Error('Duffel order response did not contain order data.');
-        }
-
-        console.log('Duffel order retrieved successfully.');
-
-        // =====================================================
-        // Booking reference / PNR
-        // =====================================================
-
-        bookingReference = order.booking_reference ?? null;
-
-        console.log('BOOKING REFERENCE:', bookingReference);
-
-        // =====================================================
-        // Flight slices
-        // =====================================================
-
-        const slices = order.slices ?? [];
-
-        if (!Array.isArray(slices) || slices.length === 0) {
-          throw new Error('Duffel order does not contain any flight slices.');
-        }
-
-        // =====================================================
-        // OUTBOUND SLICE
-        //
-        // We intentionally use the FIRST slice.
-        //
-        // Example:
-        //
-        // Slice 1:
-        // BOM → DXB
-        //
-        // Slice 2:
-        // DXB → BOM
-        //
-        // We want:
-        //
-        // source      = BOM
-        // destination = DXB
-        //
-        // Therefore we use the first segment of the first
-        // slice and do NOT use the final segment of the order.
-        // =====================================================
-
-        const outboundSlice = slices[0];
-
-        const outboundSegments = outboundSlice?.segments ?? [];
-
-        if (!Array.isArray(outboundSegments) || outboundSegments.length === 0) {
-          throw new Error(
-            'Duffel order does not contain segments for the outbound flight.',
-          );
-        }
-
-        // -----------------------------------------------------
-        // First segment of outbound journey
-        // -----------------------------------------------------
-
-        const firstOutboundSegment = outboundSegments[0];
-
-        // -----------------------------------------------------
-        // SOURCE
-        // -----------------------------------------------------
-
-        source =
-          firstOutboundSegment?.origin?.iata_code ??
-          firstOutboundSegment?.origin?.name ??
-          null;
-
-        // -----------------------------------------------------
-        // DESTINATION
-        //
-        // IMPORTANT:
-        //
-        // Use the destination of the LAST segment of the
-        // OUTBOUND slice.
-        //
-        // This correctly handles connecting flights:
-        //
-        // BOM → DEL → DXB
-        //
-        // source      = BOM
-        // destination = DXB
-        //
-        // For a return trip:
-        //
-        // Slice 1: BOM → DXB
-        // Slice 2: DXB → BOM
-        //
-        // we still use Slice 1, so:
-        //
-        // source      = BOM
-        // destination = DXB
-        // -----------------------------------------------------
-
-        const lastOutboundSegment =
-          outboundSegments[outboundSegments.length - 1];
-
-        destination =
-          lastOutboundSegment?.destination?.iata_code ??
-          lastOutboundSegment?.destination?.name ??
-          null;
-
-        console.log('FLIGHT SOURCE:', source);
-
-        console.log('FLIGHT DESTINATION:', destination);
-      }
-
-      // =======================================================
-      // HOTEL
-      // =======================================================
-
-      if (bookingTypeFromReference === 'hotel') {
-        console.log('Hotel booking callback received.');
-
-        console.log('HOTEL BOOKING ID:', orderId);
-
-        /*
-         * Hotel-specific Duffel Stays mapping
-         * remains intentionally unchanged for now.
-         */
-      }
-
-      // =======================================================
-      // Validate source
-      // =======================================================
-
-      if (!source) {
-        console.error('Booking source could not be determined.');
-
-        throw new Error('Unable to determine booking source.');
-      }
-
-      // =======================================================
-      // Check duplicate booking
-      // =======================================================
-
-      console.log('Checking for existing booking...');
-
-      const { data: existingBooking, error: existingBookingError } =
-        await supabaseAdmin
-          .from('user_bookings')
-          .select('id')
-          .eq('booking_id', orderId)
-          .maybeSingle();
-
-      if (existingBookingError) {
-        console.error('Error checking existing booking:', existingBookingError);
-
-        throw new Error(
-          `Unable to check existing booking: ${existingBookingError.message}`,
-        );
-      }
-
-      // =======================================================
-      // INSERT BOOKING
-      // =======================================================
-
-      if (!existingBooking) {
-        console.log('Creating user_bookings record...');
-
-        const { data: insertedBooking, error: insertError } =
-          await supabaseAdmin
-            .from('user_bookings')
-            .insert({
-              user_id: userId,
-
-              booking_type: bookingTypeFromReference,
-
-              source,
-
-              destination,
-
-              booking_id: orderId,
-
-              status: 'success',
-
-              booking_reference: bookingReference,
-
-              fullName,
-            })
-            .select()
-            .single();
-
-        if (insertError) {
-          console.error('Unable to insert user booking:', insertError);
-
-          throw new Error(`Unable to save booking: ${insertError.message}`);
-        }
-
-        console.log('Booking successfully stored in user_bookings.');
-
-        console.log('DATABASE BOOKING ID:', insertedBooking.id);
-
-        return new Response(
-          JSON.stringify({
-            success: true,
-
-            status: 'success',
-
+            status: 'processing',
+            message:
+              'Checkout succeeded, but booking details could not be processed yet.',
             order_id: orderId,
-
-            reference,
-
-            booking_type: bookingTypeFromReference,
-
-            booking_reference: bookingReference,
-
-            source,
-
-            destination,
-
-            booking_id: insertedBooking.id,
+            user_id: userId,
+            user_booking: userBooking,
+            booking_error: flightBookingData,
           }),
           {
             status: 200,
-
-            headers: {
-              'Content-Type': 'application/json; charset=utf-8',
-
-              'Cache-Control': 'no-store',
-            },
+            headers: corsHeaders,
           },
         );
       }
 
-      // =======================================================
-      // DUPLICATE BOOKING
-      // =======================================================
+      if (!flightBookingData?.success) {
+        console.error(
+          'duffel-flight-booking reported failure:',
+          flightBookingData,
+        );
 
-      console.log('Booking already exists. Skipping duplicate insert.');
+        return new Response(
+          JSON.stringify({
+            success: false,
+            status: 'processing',
+            message:
+              'Checkout succeeded, but booking details could not be processed yet.',
+            order_id: orderId,
+            user_id: userId,
+            user_booking: userBooking,
+            booking_error: flightBookingData,
+          }),
+          {
+            status: 200,
+            headers: corsHeaders,
+          },
+        );
+      }
+
+      // =====================================================
+      // 12. SUCCESS
+      // =====================================================
+
+      console.log('duffel-flight-booking completed successfully.');
 
       return new Response(
         JSON.stringify({
           success: true,
-
           status: 'success',
-
-          already_exists: true,
-
+          message: 'Checkout and booking processing completed successfully.',
           order_id: orderId,
-
-          reference,
-
-          booking_type: bookingTypeFromReference,
-
-          booking_reference: bookingReference,
-
-          source,
-
-          destination,
-
-          booking_id: existingBooking.id,
+          user_id: userId,
+          booking: flightBookingData.booking ?? null,
+          user_booking: flightBookingData.user_booking ?? userBooking,
         }),
         {
           status: 200,
-
-          headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-
-            'Cache-Control': 'no-store',
-          },
+          headers: corsHeaders,
         },
       );
     }
 
-    // =========================================================
-    // FAILURE
-    // =========================================================
+    // =======================================================
+    // 13. HOTEL
+    //
+    // For now we only connect the flight flow.
+    // The hotel flow remains at processing until we create
+    // the corresponding hotel-booking function.
+    // =======================================================
 
-    if (status === 'failure') {
-      console.log('Duffel checkout failed.');
-
-      return new Response(
-        JSON.stringify({
-          success: false,
-
-          status: 'failure',
-
-          order_id: orderId,
-
-          reference,
-
-          error: 'The booking could not be completed.',
-        }),
-        {
-          status: 200,
-
-          headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-
-            'Cache-Control': 'no-store',
-          },
-        },
-      );
-    }
-
-    // =========================================================
-    // ABANDONED
-    // =========================================================
-
-    if (status === 'abandoned') {
-      console.log('Duffel checkout abandoned.');
-
-      return new Response(
-        JSON.stringify({
-          success: false,
-
-          status: 'abandoned',
-
-          order_id: orderId,
-
-          reference,
-
-          error: 'The checkout was cancelled.',
-        }),
-        {
-          status: 200,
-
-          headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-
-            'Cache-Control': 'no-store',
-          },
-        },
-      );
-    }
-
-    // =========================================================
-    // UNKNOWN STATUS
-    // =========================================================
-
-    console.warn('Unknown Duffel callback status:', status);
+    console.log(
+      'Hotel booking detected. No hotel booking processor connected yet.',
+    );
 
     return new Response(
       JSON.stringify({
-        success: false,
-
-        status: status ?? 'unknown',
-
+        success: true,
+        status: 'processing',
+        message:
+          'Hotel checkout completed and initial booking record was created.',
         order_id: orderId,
-
-        reference,
-
-        error: 'Unknown Duffel checkout status.',
+        user_id: userId,
+        booking_type: bookingType,
+        user_booking: userBooking,
       }),
       {
-        status: 400,
-
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-
-          'Cache-Control': 'no-store',
-        },
+        status: 200,
+        headers: corsHeaders,
       },
     );
   } catch (error) {
-    // =========================================================
-    // GLOBAL ERROR
-    // =========================================================
-
     console.error('========== DUFFEL CHECKOUT CALLBACK ERROR ==========');
-
     console.error(error);
 
     return new Response(
       JSON.stringify({
         success: false,
-
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Unable to finalize Duffel booking.',
+        error: error instanceof Error ? error.message : String(error),
       }),
       {
         status: 500,
-
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-
-          'Cache-Control': 'no-store',
-        },
+        headers: corsHeaders,
       },
     );
   }
