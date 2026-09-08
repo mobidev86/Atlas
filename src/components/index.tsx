@@ -8,6 +8,7 @@ import {
   Image,
 } from 'react-native';
 import styles from '../styles/styles';
+import Ionicons from '@react-native-vector-icons/ionicons';
 
 import EYE_OPEN_ICON from '../assets/images/ic_hide_pass.png';
 import EYE_CLOSED_ICON from '../assets/images/ic_show_pass.png';
@@ -46,7 +47,9 @@ interface ResultCardProps {
   meta: string;
   price: string;
   badges: string[];
-  onPress: () => void;
+  reason?: string;
+  onPress?: () => void;
+  onViewMap?: () => void;
 }
 
 export function ResultCard({
@@ -54,18 +57,56 @@ export function ResultCard({
   meta,
   price,
   badges,
+  reason,
   onPress,
+  onViewMap,
 }: ResultCardProps) {
   return (
     <Pressable style={styles.resultCardEnhanced} onPress={onPress}>
       <View style={styles.resultCardTop}>
         <View style={{ flex: 1 }}>
           <Text style={styles.resultTitle}>{title}</Text>
+
           <Text style={styles.resultMeta}>{meta}</Text>
         </View>
-        <Text style={styles.resultPrice}>{price}</Text>
+
+        {!!price && <Text style={styles.resultPrice}>{price}</Text>}
       </View>
-      <BadgeRow badges={badges} />
+
+      {!!reason && (
+        <View style={styles.reasonContainer}>
+          <View style={styles.reasonIconContainer}>
+            <Ionicons name="sparkles" size={14} color="#7C5C00" />
+          </View>
+
+          <View style={styles.reasonContent}>
+            <Text style={styles.reasonLabel}>Why we recommend it</Text>
+
+            <Text style={styles.reasonText}>{reason}</Text>
+          </View>
+        </View>
+      )}
+
+      <View style={styles.resultCardBottom}>
+        <View style={styles.badgeContainer}>
+          <BadgeRow badges={badges} />
+        </View>
+
+        {onViewMap && (
+          <Pressable
+            style={styles.resultMapButton}
+            onPress={event => {
+              event.stopPropagation();
+              onViewMap();
+            }}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel={`View ${title} on map`}
+          >
+            <Ionicons name="location-outline" size={20} color="#1E293B" />
+          </Pressable>
+        )}
+      </View>
     </Pressable>
   );
 }

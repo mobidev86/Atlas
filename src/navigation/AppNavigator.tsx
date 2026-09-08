@@ -15,12 +15,16 @@ import {
   createNativeStackNavigator,
   NativeStackScreenProps,
 } from '@react-navigation/native-stack';
+
 import { RootStackParamList } from '../types/navigation';
 import { AuthMode } from '../types';
 import { useAuth, AuthRouteState } from '../context/AuthContext';
+
 import { MainTabNavigator } from './MainTabNavigator';
 import { MainLayout } from '../components/MainLayout';
+
 import styles from '../styles/styles';
+
 import {
   SplashScreen,
   AuthScreen,
@@ -29,6 +33,7 @@ import {
   ReplyScreen,
   ConfirmScreen,
 } from '../screens';
+
 import { SubscriptionService } from '../services/subscriptionService';
 import { useStripe } from '@stripe/stripe-react-native';
 import LoadingOverlay from '../components/LoadingOverlay';
@@ -89,7 +94,7 @@ function SplashScreenContainer({ navigation }: SplashScreenProps) {
  * Auth
  * -----------------------------------------
  */
-function AuthScreenContainer({ route, navigation }: AuthScreenWrapperProps) {
+function AuthScreenContainer({ route }: AuthScreenWrapperProps) {
   const [authMode, setAuthMode] = useState<AuthMode>(
     route.params?.initialMode ?? 'login',
   );
@@ -108,10 +113,6 @@ function AuthScreenContainer({ route, navigation }: AuthScreenWrapperProps) {
  * -----------------------------------------
  * SetupIntent helper
  * -----------------------------------------
- *
- * SetupIntent client secrets are formatted as:
- *
- * seti_xxx_secret_yyy
  */
 function extractSetupIntentId(clientSecret: string): string {
   return clientSecret.split('_secret_')[0];
@@ -150,10 +151,8 @@ function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
       setError(null);
 
       /**
-       * ---------------------------------------
        * Step 1:
-       * Create trial setup
-       * ---------------------------------------
+       * Create trial setup.
        */
       const setupResult = await SubscriptionService.createTrialSetup(tier);
 
@@ -169,10 +168,8 @@ function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
       }
 
       /**
-       * ---------------------------------------
        * Step 2:
-       * PaymentSheet
-       * ---------------------------------------
+       * PaymentSheet.
        */
       const { error: initError } = await initPaymentSheet({
         merchantDisplayName: 'Atlas',
@@ -190,18 +187,12 @@ function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
 
       if (initError) {
         setError(initError.message);
-
         return;
       }
 
       const { error: presentError } = await presentPaymentSheet();
 
       if (presentError) {
-        /**
-         * User canceled, or card was
-         * declined — not necessarily
-         * a real error.
-         */
         if (presentError.code !== 'Canceled') {
           setError(presentError.message);
         }
@@ -210,10 +201,8 @@ function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
       }
 
       /**
-       * ---------------------------------------
        * Step 3:
-       * Card saved successfully
-       * ---------------------------------------
+       * Card saved successfully.
        */
       const setupIntentId = extractSetupIntentId(
         setupResult.setupIntentClientSecret,
@@ -230,9 +219,7 @@ function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
       }
 
       /**
-       * ---------------------------------------
-       * Resolve 3DS
-       * ---------------------------------------
+       * Resolve 3DS.
        */
       if (
         confirmResult.paymentIntentStatus === 'requires_action' &&
@@ -257,9 +244,8 @@ function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
       }
 
       /**
-       * ---------------------------------------
-       * Refresh subscription
-       * ---------------------------------------
+       * Refresh subscription after
+       * successful subscription.
        */
       await refreshSubscription(user);
     } catch (err: any) {
@@ -282,21 +268,13 @@ function SubscribeScreenContainer({ navigation }: SubscribeScreenWrapperProps) {
     SubscriptionService.getTrialEligibility().then(result => {
       setIsTrialEligible(result.isEligible);
     });
-  }, []);
+  }, [user]);
 
   return (
     <SubscribeScreen
       onSubscribe={handleSubscribe}
       onBack={async () => {
         await logout();
-
-        /**
-         * Don't manually navigate here.
-         *
-         * logout() flips authRouteState
-         * to 'auth', and AppNavigator
-         * handles the reset.
-         */
       }}
       isProcessing={isProcessing}
       error={error}
@@ -355,6 +333,7 @@ function ConfirmScreenContainer({
   navigation,
 }: ConfirmScreenWrapperProps) {
   const confirmation = route.params.confirmation;
+
   const booking = route.params.booking;
 
   return (
@@ -429,20 +408,21 @@ function routeStateToScreen(
  * -----------------------------------------
  */
 export function AppNavigator() {
-  const { authRouteState, isLoading } = useAuth();
+  const { authRouteState, isLoading, isInitialLoading } = useAuth();
 
-  /**
-   * null = nothing applied yet.
-   *
-   * Only ever set when we've either
-   * dispatched a reset for this route,
-   * or confirmed the navigator already
-   * mounted on it.
-   */
   const appliedRouteStateRef = useRef<ResolvedRouteState | null>(null);
 
   const [isNavReady, setIsNavReady] = useState(false);
 
+  /**
+   * While initial auth/session restoration
+   * is happening, use Auth as a temporary
+   * navigator route.
+   *
+   * Once restoration completes,
+   * authRouteState will determine the real
+   * route.
+   */
   const initialRoute = routeStateToScreen(
     authRouteState === 'loading' ? 'auth' : authRouteState,
   );
@@ -468,11 +448,7 @@ export function AppNavigator() {
     const targetScreen = routeStateToScreen(authRouteState);
 
     /**
-     * If this is the very first time
-     * we're applying anything, and the
-     * navigator already mounted on the
-     * correct screen via initialRouteName,
-     * just record it.
+     * First route application.
      */
     if (
       appliedRouteStateRef.current === null &&
@@ -502,11 +478,31 @@ export function AppNavigator() {
    * -----------------------------------------
    * Initial Loading
    * -----------------------------------------
+   *
+   * IMPORTANT:
+   *
+   * Use isInitialLoading here, NOT isLoading.
+   *
+   * isLoading is for actions such as login,
+   * registration and subscription.
    */
-  if (isLoading) {
+  if (isInitialLoading) {
     return <LoadingScreen />;
   }
 
+  /**
+   * -----------------------------------------
+   * Loading Overlay
+   * -----------------------------------------
+   *
+   * Only show the overlay for:
+   *
+   * - explicit auth operations
+   * - unresolved auth route
+   *
+   * Subscription checking no longer blocks
+   * startup.
+   */
   const showOverlay = isLoading || authRouteState === 'loading';
 
   /**

@@ -9,24 +9,30 @@ export class SubscriptionService {
   /**
    * Get current user subscription
    */
-  static async getCurrentSubscription(): Promise<{
+  static async getCurrentSubscription(userId?: string): Promise<{
     subscription: Subscription | null;
     error: string | null;
   }> {
     try {
-      const { user } = await AuthService.getCurrentUser();
+      let resolvedUserId = userId;
 
-      if (!user) {
-        return {
-          subscription: null,
-          error: 'User not authenticated.',
-        };
+      if (!resolvedUserId) {
+        const { user } = await AuthService.getCurrentUser();
+
+        if (!user) {
+          return {
+            subscription: null,
+            error: 'User not authenticated.',
+          };
+        }
+
+        resolvedUserId = user.id;
       }
 
       const { data, error } = await supabase
         .from('subscriptions')
         .select('*')
-        .eq('user_id', user.id)
+        .eq('user_id', resolvedUserId)
         .in('status', ['active', 'trialing'])
         .order('created_at', {
           ascending: false,

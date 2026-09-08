@@ -9,6 +9,10 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
+/* ============================================================
+ * Types
+ * ============================================================ */
+
 interface DuffelWebhookEvent {
   id?: string;
   type?: string;
@@ -17,12 +21,18 @@ interface DuffelWebhookEvent {
   created_at?: string;
   api_version?: string;
   identity_organisation_id?: string;
+
   data?: {
     object?: any;
     [key: string]: any;
   };
+
   [key: string]: any;
 }
+
+/* ============================================================
+ * Generic helpers
+ * ============================================================ */
 
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -34,18 +44,12 @@ function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   });
 }
 
-/**
- * Convert Uint8Array to lowercase hexadecimal.
- */
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map(byte => byte.toString(16).padStart(2, '0'))
     .join('');
 }
 
-/**
- * Constant-time comparison.
- */
 function secureCompare(a: string, b: string): boolean {
   if (a.length !== b.length) {
     return false;
@@ -60,15 +64,66 @@ function secureCompare(a: string, b: string): boolean {
   return result === 0;
 }
 
+function stringValue(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value.trim();
+  }
+
+  return null;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const result = stringValue(value);
+
+    if (result) {
+      return result;
+    }
+  }
+
+  return null;
+}
+
+function numberValue(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function dateOnly(value: unknown): string | null {
+  const text = stringValue(value);
+
+  if (!text) {
+    return null;
+  }
+
+  const match = text.match(/^(\d{4}-\d{2}-\d{2})/);
+
+  return match ? match[1] : null;
+}
+
+/* ============================================================
+ * Duffel webhook signature
+ * ============================================================ */
+
 /**
- * Verify Duffel's webhook signature.
+ * Duffel currently sends a signature header that may look like:
  *
- * Duffel sends:
+ * t=<timestamp>,v2=<signature>
  *
- * X-Duffel-Signature:
- * t=timestamp,v1=signature
+ * We support both v1 and v2.
  *
- * The signature is HMAC-SHA256 of:
+ * The signed payload is:
  *
  * timestamp + "." + raw request body
  */
@@ -78,35 +133,95 @@ async function verifyDuffelSignature(
   secret: string,
 ): Promise<boolean> {
   try {
-    if (!signatureHeader || !secret) {
+    if (!signatureHeader) {
+      console.error('Duffel signature header is empty');
       return false;
     }
 
-    const parts = signatureHeader.split(',');
+    if (!secret) {
+      console.error('Duffel webhook secret is empty');
+      return false;
+    }
+
+    console.log(
+      'Duffel signature raw diagnostics:',
+      JSON.stringify({
+        length: signatureHeader.length,
+        first_char: signatureHeader.charAt(0),
+        last_char: signatureHeader.charAt(signatureHeader.length - 1),
+        comma_count: (signatureHeader.match(/,/g) ?? []).length,
+        equals_count: (signatureHeader.match(/=/g) ?? []).length,
+      }),
+    );
+
+    const parameters = signatureHeader
+      .split(',')
+      .map(part => part.trim())
+      .filter(Boolean);
 
     let timestamp: string | null = null;
-    let receivedSignature: string | null = null;
 
-    for (const part of parts) {
-      const [key, ...valueParts] = part.split('=');
+    const receivedSignatures: Array<{
+      version: string;
+      signature: string;
+    }> = [];
 
-      if (!key || valueParts.length === 0) {
+    for (const parameter of parameters) {
+      const equalsIndex = parameter.indexOf('=');
+
+      if (equalsIndex === -1) {
         continue;
       }
 
-      const value = valueParts.join('=');
+      const key = parameter.slice(0, equalsIndex).trim().toLowerCase();
 
-      if (key.trim() === 't') {
-        timestamp = value.trim();
+      const value = parameter.slice(equalsIndex + 1).trim();
+
+      console.log(
+        'Duffel signature parameter:',
+        JSON.stringify({
+          key,
+          value_length: value.length,
+        }),
+      );
+
+      if (key === 't') {
+        timestamp = value;
+        continue;
       }
 
-      if (key.trim() === 'v1') {
-        receivedSignature = value.trim();
+      if ((key === 'v1' || key === 'v2') && value.length > 0) {
+        receivedSignatures.push({
+          version: key,
+          signature: value,
+        });
       }
     }
 
-    if (!timestamp || !receivedSignature) {
-      console.error('Invalid Duffel signature format');
+    console.log(
+      'Duffel signature parsed diagnostics:',
+      JSON.stringify({
+        parameter_count: parameters.length,
+        has_timestamp: Boolean(timestamp),
+        timestamp_length: timestamp?.length ?? 0,
+        signature_count: receivedSignatures.length,
+        signatures: receivedSignatures.map(item => ({
+          version: item.version,
+          length: item.signature.length,
+        })),
+      }),
+    );
+
+    if (!timestamp || receivedSignatures.length === 0) {
+      console.error(
+        'Invalid Duffel signature format.',
+        JSON.stringify({
+          parameter_count: parameters.length,
+          has_timestamp: Boolean(timestamp),
+          signature_count: receivedSignatures.length,
+        }),
+      );
+
       return false;
     }
 
@@ -131,32 +246,64 @@ async function verifyDuffelSignature(
       encoder.encode(signedPayload),
     );
 
-    const expectedSignature = bytesToHex(new Uint8Array(signatureBuffer));
+    const expectedSignature = bytesToHex(
+      new Uint8Array(signatureBuffer),
+    ).toLowerCase();
 
-    return secureCompare(
-      expectedSignature.toLowerCase(),
-      receivedSignature.toLowerCase(),
+    for (const item of receivedSignatures) {
+      const receivedSignature = item.signature.toLowerCase();
+
+      if (secureCompare(expectedSignature, receivedSignature)) {
+        console.log(
+          `Duffel webhook signature verified successfully using ${item.version}.`,
+        );
+
+        return true;
+      }
+    }
+
+    console.error(
+      'Duffel webhook signature verification failed.',
+      JSON.stringify({
+        timestamp_length: timestamp.length,
+        expected_signature_length: expectedSignature.length,
+        received_signatures: receivedSignatures.map(item => ({
+          version: item.version,
+          length: item.signature.length,
+        })),
+      }),
     );
+
+    return false;
   } catch (error) {
-    console.error('Duffel signature verification error:', error);
+    console.error(
+      'Duffel signature verification error:',
+      error instanceof Error ? error.message : String(error),
+    );
+
     return false;
   }
 }
 
+/* ============================================================
+ * Atlas reference
+ * ============================================================ */
+
 /**
- * Extract our Atlas booking reference.
+ * Current checkout-session reference:
  *
- * Expected formats:
+ * ATLAS_FLIGHT_<user_id>_<request_id>
+ * ATLAS_HOTEL_<user_id>_<request_id>
  *
- * ATLAS_FLIGHT_<user_id>_<uuid>
- * ATLAS_HOTEL_<user_id>_<uuid>
+ * IMPORTANT:
  *
- * The UUID at the end is our internal booking record ID.
+ * The second UUID is NOT a user_bookings.id.
+ * It is only our checkout request/correlation ID.
  */
 function parseAtlasReference(reference: string | null | undefined): {
   bookingType: 'flight' | 'hotel';
   userId: string;
-  internalBookingId: string;
+  requestId: string;
 } | null {
   if (!reference) {
     return null;
@@ -170,7 +317,7 @@ function parseAtlasReference(reference: string | null | undefined): {
     return {
       bookingType: 'flight',
       userId: flightMatch[1],
-      internalBookingId: flightMatch[2],
+      requestId: flightMatch[2],
     };
   }
 
@@ -182,7 +329,7 @@ function parseAtlasReference(reference: string | null | undefined): {
     return {
       bookingType: 'hotel',
       userId: hotelMatch[1],
-      internalBookingId: hotelMatch[2],
+      requestId: hotelMatch[2],
     };
   }
 
@@ -190,68 +337,108 @@ function parseAtlasReference(reference: string | null | undefined): {
 }
 
 /**
- * Extract a string safely.
+ * Find an Atlas reference from the Duffel resource/event.
  */
-function stringValue(value: unknown): string | null {
-  if (typeof value === 'string' && value.trim().length > 0) {
-    return value.trim();
-  }
+function extractAtlasReference(resource: any, eventObject: any): string | null {
+  return firstString(
+    resource?.metadata?.checkout_reference,
+    resource?.metadata?.booking_reference,
+    resource?.metadata?.atlas_reference,
 
-  return null;
+    resource?.reference,
+
+    eventObject?.metadata?.checkout_reference,
+    eventObject?.metadata?.booking_reference,
+    eventObject?.metadata?.atlas_reference,
+
+    eventObject?.reference,
+  );
 }
 
-/**
- * Extract the first available value from multiple possible paths.
- */
-function firstString(...values: unknown[]): string | null {
-  for (const value of values) {
-    const result = stringValue(value);
-
-    if (result) {
-      return result;
-    }
-  }
-
-  return null;
-}
+/* ============================================================
+ * Supabase admin key
+ * ============================================================ */
 
 /**
- * Convert an amount to number.
+ * Resolve the Supabase admin/service key.
+ *
+ * Supports:
+ *
+ * SUPABASE_SERVICE_ROLE_KEY
+ * SUPABASE_SECRET_KEY
+ * SUPABASE_SECRET_KEYS
+ *
+ * Some Supabase environments expose SUPABASE_SECRET_KEYS
+ * as a JSON object. If so, try to extract the default value.
  */
-function numberValue(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
+function resolveSupabaseServiceKey(): string | null {
+  const directServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+
+  if (directServiceRoleKey) {
+    return directServiceRoleKey;
   }
 
-  if (typeof value === 'string' && value.trim() !== '') {
-    const parsed = Number(value);
+  const directSecretKey = Deno.env.get('SUPABASE_SECRET_KEY');
 
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
+  if (directSecretKey) {
+    return directSecretKey;
   }
 
-  return null;
-}
+  const secretKeys = Deno.env.get('SUPABASE_SECRET_KEYS');
 
-/**
- * Convert date/time into YYYY-MM-DD.
- */
-function dateOnly(value: unknown): string | null {
-  const text = stringValue(value);
-
-  if (!text) {
+  if (!secretKeys) {
     return null;
   }
 
-  const match = text.match(/^(\d{4}-\d{2}-\d{2})/);
+  /*
+   * First try it directly.
+   */
+  if (
+    !secretKeys.trim().startsWith('{') &&
+    !secretKeys.trim().startsWith('[')
+  ) {
+    return secretKeys;
+  }
 
-  return match ? match[1] : null;
+  /*
+   * Otherwise attempt to parse JSON.
+   */
+  try {
+    const parsed = JSON.parse(secretKeys);
+
+    if (typeof parsed === 'string') {
+      return parsed;
+    }
+
+    if (parsed && typeof parsed === 'object') {
+      const possibleKeys = [
+        parsed.default,
+        parsed.service_role,
+        parsed.serviceRole,
+        parsed.SUPABASE_SERVICE_ROLE_KEY,
+        parsed.SUPABASE_SECRET_KEY,
+      ];
+
+      for (const value of possibleKeys) {
+        if (typeof value === 'string' && value.trim()) {
+          return value.trim();
+        }
+      }
+    }
+  } catch (error) {
+    console.error(
+      'Unable to parse SUPABASE_SECRET_KEYS.',
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
+  return null;
 }
 
-/**
- * Get Duffel API resource.
- */
+/* ============================================================
+ * Duffel API
+ * ============================================================ */
+
 async function duffelGet(path: string, apiKey: string): Promise<any | null> {
   try {
     const response = await fetch(`${DUFFEL_BASE_URL}${path}`, {
@@ -275,38 +462,23 @@ async function duffelGet(path: string, apiKey: string): Promise<any | null> {
       return JSON.parse(text);
     } catch {
       console.error(`Duffel GET ${path} returned invalid JSON`);
+
       return null;
     }
   } catch (error) {
-    console.error(`Duffel GET ${path} network error:`, error);
+    console.error(
+      `Duffel GET ${path} network error:`,
+      error instanceof Error ? error.message : String(error),
+    );
+
     return null;
   }
 }
 
-/**
- * Get the internal Atlas booking record.
- */
-async function getInternalBooking(
-  supabaseAdmin: any,
-  internalBookingId: string,
-) {
-  const { data, error } = await supabaseAdmin
-    .from('user_bookings')
-    .select('*')
-    .eq('id', internalBookingId)
-    .maybeSingle();
+/* ============================================================
+ * Profile
+ * ============================================================ */
 
-  if (error) {
-    console.error('Failed to fetch internal booking:', error);
-    return null;
-  }
-
-  return data;
-}
-
-/**
- * Get profile full name.
- */
 async function getFullName(
   supabaseAdmin: any,
   userId: string,
@@ -319,36 +491,39 @@ async function getFullName(
 
   if (error) {
     console.error('Failed to fetch profile:', error);
+
     return null;
   }
 
   return firstString(data?.full_name);
 }
 
-/**
- * Extract flight details from Duffel order.
- */
+/* ============================================================
+ * Flight details
+ * ============================================================ */
+
 function extractFlightDetails(order: any) {
   const slices = Array.isArray(order?.slices) ? order.slices : [];
 
-  const firstSlice = slices[0];
+  /*
+   * ============================================================
+   * FIRST FLIGHT / OUTBOUND
+   * ============================================================
+   */
 
-  const lastSlice = slices.length > 0 ? slices[slices.length - 1] : null;
+  const firstSlice = slices[0] ?? null;
 
-  const firstSegment =
-    Array.isArray(firstSlice?.segments) && firstSlice.segments.length > 0
-      ? firstSlice.segments[0]
-      : null;
-
-  const lastSliceSegments = Array.isArray(lastSlice?.segments)
-    ? lastSlice.segments
+  const firstSliceSegments = Array.isArray(firstSlice?.segments)
+    ? firstSlice.segments
     : [];
 
-  const lastSegment =
-    lastSliceSegments.length > 0
-      ? lastSliceSegments[lastSliceSegments.length - 1]
-      : null;
+  const firstSegment =
+    firstSliceSegments.length > 0 ? firstSliceSegments[0] : null;
 
+  /*
+   * Source:
+   * First segment's origin.
+   */
   const source = firstString(
     firstSegment?.origin?.iata_code,
     firstSegment?.origin?.iata,
@@ -356,20 +531,49 @@ function extractFlightDetails(order: any) {
     firstSlice?.origin?.iata,
   );
 
+  /*
+   * Destination:
+   * Final segment's destination within the FIRST slice.
+   *
+   * Example:
+   *
+   * BOM -> DEL -> LHR
+   *
+   * source      = BOM
+   * destination = LHR
+   *
+   * We do NOT look at the return slice here.
+   */
+  const lastFirstSliceSegment =
+    firstSliceSegments.length > 0
+      ? firstSliceSegments[firstSliceSegments.length - 1]
+      : null;
+
   const destination = firstString(
-    lastSegment?.destination?.iata_code,
-    lastSegment?.destination?.iata,
-    lastSlice?.destination?.iata_code,
-    lastSlice?.destination?.iata,
+    lastFirstSliceSegment?.destination?.iata_code,
+    lastFirstSliceSegment?.destination?.iata,
+    firstSlice?.destination?.iata_code,
+    firstSlice?.destination?.iata,
   );
 
+  /*
+   * Departure date:
+   * First segment of the FIRST slice.
+   */
   const departureDate = dateOnly(
-    firstString(
-      firstSegment?.departing_at,
-      firstSlice?.departing_at,
-      order?.slices?.[0]?.segments?.[0]?.departing_at,
-    ),
+    firstString(firstSegment?.departing_at, firstSlice?.departing_at),
   );
+
+  /*
+   * ============================================================
+   * RETURN FLIGHT
+   * ============================================================
+   *
+   * We only store the RETURN DATE.
+   *
+   * We do NOT use the return flight to determine source
+   * or destination.
+   */
 
   let returnDate: string | null = null;
 
@@ -380,20 +584,45 @@ function extractFlightDetails(order: any) {
       ? returnSlice.segments
       : [];
 
-    const lastReturnSegment =
-      returnSegments.length > 0
-        ? returnSegments[returnSegments.length - 1]
-        : null;
+    /*
+     * For the return date, use the first segment's
+     * departure date.
+     *
+     * Example:
+     *
+     * Outbound:
+     * BOM -> LHR
+     * 2026-09-15
+     *
+     * Return:
+     * LHR -> BOM
+     * 2026-09-20
+     *
+     * return_date = 2026-09-20
+     */
+    const firstReturnSegment =
+      returnSegments.length > 0 ? returnSegments[0] : null;
 
     returnDate = dateOnly(
       firstString(
-        lastReturnSegment?.arriving_at,
-        lastReturnSegment?.departing_at,
-        returnSlice?.arriving_at,
+        firstReturnSegment?.departing_at,
         returnSlice?.departing_at,
+
+        /*
+         * Fallbacks in case the slice structure provides
+         * the date at another level.
+         */
+        firstReturnSegment?.arriving_at,
+        returnSlice?.arriving_at,
       ),
     );
   }
+
+  /*
+   * ============================================================
+   * PASSENGER
+   * ============================================================
+   */
 
   const passenger =
     Array.isArray(order?.passengers) && order.passengers.length > 0
@@ -404,8 +633,15 @@ function extractFlightDetails(order: any) {
     passenger?.given_name && passenger?.family_name
       ? `${passenger.given_name} ${passenger.family_name}`
       : null,
+
     passenger?.name,
   );
+
+  /*
+   * ============================================================
+   * AIRLINE
+   * ============================================================
+   */
 
   const airline = firstString(
     order?.owner?.name,
@@ -414,17 +650,31 @@ function extractFlightDetails(order: any) {
     firstSegment?.operating_carrier?.name,
   );
 
+  /*
+   * ============================================================
+   * PRICE
+   * ============================================================
+   */
+
   const price = numberValue(
     firstString(order?.total_amount, order?.price?.amount),
   );
+
+  /*
+   * ============================================================
+   * CURRENCY
+   * ============================================================
+   */
 
   const currency = firstString(order?.total_currency, order?.price?.currency);
 
   return {
     source,
     destination,
+
     departure_date: departureDate,
     return_date: returnDate,
+
     airline,
     passenger_name: passengerName,
     price,
@@ -432,9 +682,10 @@ function extractFlightDetails(order: any) {
   };
 }
 
-/**
- * Extract hotel/stay details.
- */
+/* ============================================================
+ * Hotel details
+ * ============================================================ */
+
 function extractHotelDetails(booking: any, quote: any) {
   const accommodation =
     booking?.accommodation ??
@@ -461,16 +712,10 @@ function extractHotelDetails(booking: any, quote: any) {
     booking?.hotel_name,
     quote?.accommodation_name,
     quote?.hotel_name,
+    firstRoom?.accommodation?.name,
   );
 
-  const source = firstString(
-    accommodation?.location?.city,
-    accommodation?.location?.city_name,
-    booking?.city,
-    quote?.city,
-  );
-
-  const destination = firstString(
+  const city = firstString(
     accommodation?.location?.city,
     accommodation?.location?.city_name,
     booking?.city,
@@ -481,6 +726,7 @@ function extractHotelDetails(booking: any, quote: any) {
     firstGuest?.given_name && firstGuest?.family_name
       ? `${firstGuest.given_name} ${firstGuest.family_name}`
       : null,
+
     firstGuest?.name,
     booking?.lead_guest?.name,
   );
@@ -490,6 +736,7 @@ function extractHotelDetails(booking: any, quote: any) {
       booking?.total_amount,
       booking?.total?.amount,
       quote?.total_amount,
+      quote?.total?.amount,
     ),
   );
 
@@ -497,6 +744,7 @@ function extractHotelDetails(booking: any, quote: any) {
     booking?.total_currency,
     booking?.total?.currency,
     quote?.total_currency,
+    quote?.total?.currency,
   );
 
   const departureDate = dateOnly(
@@ -504,6 +752,7 @@ function extractHotelDetails(booking: any, quote: any) {
       booking?.check_in_date,
       booking?.check_in,
       quote?.check_in_date,
+      quote?.check_in,
     ),
   );
 
@@ -512,12 +761,13 @@ function extractHotelDetails(booking: any, quote: any) {
       booking?.check_out_date,
       booking?.check_out,
       quote?.check_out_date,
+      quote?.check_out,
     ),
   );
 
   return {
-    source,
-    destination,
+    source: city,
+    destination: city,
     departure_date: departureDate,
     return_date: returnDate,
     hotel_name: hotelName,
@@ -527,9 +777,10 @@ function extractHotelDetails(booking: any, quote: any) {
   };
 }
 
-/**
- * Find an internal booking by Duffel booking/order ID.
- */
+/* ============================================================
+ * Existing booking lookup
+ * ============================================================ */
+
 async function findByDuffelBookingId(supabaseAdmin: any, bookingId: string) {
   const { data, error } = await supabaseAdmin
     .from('user_bookings')
@@ -546,35 +797,33 @@ async function findByDuffelBookingId(supabaseAdmin: any, bookingId: string) {
   return data;
 }
 
-/**
- * Update a booking record.
- */
-async function updateBooking(
+/* ============================================================
+ * Insert booking
+ * ============================================================ */
+
+async function insertBooking(
   supabaseAdmin: any,
-  id: string,
-  updates: Record<string, unknown>,
+  booking: Record<string, unknown>,
 ) {
   const { data, error } = await supabaseAdmin
     .from('user_bookings')
-    .update({
-      ...updates,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', id)
+    .insert(booking)
     .select()
     .maybeSingle();
 
   if (error) {
-    console.error('Failed to update user_bookings:', error);
+    console.error('Failed to insert user_bookings:', error);
+
     return null;
   }
 
   return data;
 }
 
-/**
- * Process successful flight order.
- */
+/* ============================================================
+ * Flight: successful order
+ * ============================================================ */
+
 async function processFlightCreated(
   event: DuffelWebhookEvent,
   supabaseAdmin: any,
@@ -582,206 +831,517 @@ async function processFlightCreated(
 ) {
   const eventObject = event.data?.object ?? {};
 
-  const orderId = firstString(
-    eventObject?.id,
-    eventObject?.order_id,
-    event?.idempotency_key,
-  );
+  let orderId = firstString(eventObject?.id, eventObject?.order_id);
 
+  /*
+   * If the event doesn't contain the order ID directly,
+   * don't use the event id as booking_id.
+   */
   if (!orderId) {
-    throw new Error('Unable to determine Duffel flight order ID');
+    console.warn('order.created event did not contain a Duffel order ID.');
+
+    return {
+      success: false,
+      reason: 'missing_duffel_order_id',
+    };
   }
 
-  console.log('Processing flight order:', orderId);
+  console.log('Processing Duffel flight order:', orderId);
 
+  /*
+   * Fetch the authoritative Duffel order.
+   */
   const orderResponse = await duffelGet(
     `/air/orders/${encodeURIComponent(orderId)}`,
     duffelApiKey,
   );
 
-  const order = orderResponse?.data ?? eventObject;
+  if (!orderResponse?.data) {
+    throw new Error(`Unable to fetch Duffel flight order ${orderId}`);
+  }
+
+  const order = orderResponse.data;
+
+  /*
+   * Extract Atlas reference.
+   */
+  const reference = extractAtlasReference(order, eventObject);
+
+  console.log('Duffel flight Atlas reference:', reference);
+
+  const parsedReference = parseAtlasReference(reference);
+
+  if (!parsedReference) {
+    console.error('Unable to parse Atlas flight reference.', {
+      orderId,
+      reference,
+    });
+
+    return {
+      success: false,
+      reason: 'invalid_atlas_reference',
+      order_id: orderId,
+      reference,
+    };
+  }
+
+  if (parsedReference.bookingType !== 'flight') {
+    console.error('Atlas reference is not a flight reference.', {
+      orderId,
+      reference,
+      bookingType: parsedReference.bookingType,
+    });
+
+    return {
+      success: false,
+      reason: 'reference_booking_type_mismatch',
+      order_id: orderId,
+      reference,
+    };
+  }
+
+  /*
+   * Idempotency:
+   *
+   * Duffel can deliver the same webhook more than once.
+   *
+   * Never create another user_bookings row for the same
+   * actual Duffel order ID.
+   */
+  const existing = await findByDuffelBookingId(supabaseAdmin, orderId);
+
+  if (existing) {
+    console.log('Flight booking already exists. Skipping duplicate webhook.', {
+      orderId,
+      existingBookingId: existing.id,
+    });
+
+    return {
+      success: true,
+      duplicate: true,
+      booking_type: 'flight',
+      order_id: orderId,
+      booking_id: existing.id,
+    };
+  }
+
+  const fullName = await getFullName(supabaseAdmin, parsedReference.userId);
+
+  if (!fullName) {
+    throw new Error(
+      `Unable to determine Atlas full name for user ${parsedReference.userId}`,
+    );
+  }
+
+  const details = extractFlightDetails(order);
 
   const bookingReference = firstString(
     order?.booking_reference,
     order?.reference,
   );
 
-  const metadataReference = firstString(
-    order?.metadata?.checkout_reference,
-    order?.metadata?.booking_reference,
-    eventObject?.metadata?.checkout_reference,
-    eventObject?.metadata?.booking_reference,
-  );
+  const row: Record<string, unknown> = {
+    user_id: parsedReference.userId,
 
-  const reference = metadataReference ?? bookingReference ?? null;
-
-  /*
-   * First try our known internal booking ID.
-   */
-  let internalBooking = await findByDuffelBookingId(supabaseAdmin, orderId);
-
-  /*
-   * Then try our Atlas reference.
-   */
-  let parsedReference = parseAtlasReference(reference);
-
-  if (!internalBooking && parsedReference) {
-    internalBooking = await getInternalBooking(
-      supabaseAdmin,
-      parsedReference.internalBookingId,
-    );
-  }
-
-  /*
-   * If we cannot associate the Duffel order with a user,
-   * don't create an orphan booking.
-   */
-  if (!internalBooking) {
-    console.error(
-      'Unable to associate Duffel flight order with an Atlas booking.',
-      {
-        orderId,
-        reference,
-      },
-    );
-
-    return {
-      success: false,
-      reason: 'internal_booking_not_found',
-      order_id: orderId,
-      reference,
-    };
-  }
-
-  const details = extractFlightDetails(order);
-
-  const updates: Record<string, unknown> = {
-    booking_id: orderId,
     booking_type: 'flight',
+
+    source: details.source,
+
+    destination: details.destination,
+
+    /*
+     * IMPORTANT:
+     *
+     * This is the REAL Duffel order ID.
+     */
+    booking_id: orderId,
+
     status: 'success',
+
+    booking_reference: bookingReference,
+
+    fullName,
+
+    departure_date: details.departure_date,
+
+    return_date: details.return_date,
+
+    airline: details.airline,
+
+    passenger_name: details.passenger_name,
+
+    price: details.price,
+
+    currency: details.currency,
+
+    updated_at: new Date().toISOString(),
   };
 
-  if (details.source) {
-    updates.source = details.source;
+  const inserted = await insertBooking(supabaseAdmin, row);
+
+  if (!inserted) {
+    throw new Error(`Unable to create flight booking ${orderId}`);
   }
 
-  if (details.destination) {
-    updates.destination = details.destination;
-  }
-
-  if (bookingReference) {
-    updates.booking_reference = bookingReference;
-  }
-
-  if (details.departure_date) {
-    updates.departure_date = details.departure_date;
-  }
-
-  if (details.return_date) {
-    updates.return_date = details.return_date;
-  }
-
-  if (details.airline) {
-    updates.airline = details.airline;
-  }
-
-  if (details.passenger_name) {
-    updates.passenger_name = details.passenger_name;
-  }
-
-  if (details.price !== null) {
-    updates.price = details.price;
-  }
-
-  if (details.currency) {
-    updates.currency = details.currency;
-  }
-
-  const updated = await updateBooking(
-    supabaseAdmin,
-    internalBooking.id,
-    updates,
-  );
-
-  if (!updated) {
-    throw new Error(`Unable to update flight booking ${internalBooking.id}`);
-  }
+  console.log('Flight booking successfully inserted into user_bookings.', {
+    atlasUserId: parsedReference.userId,
+    bookingId: inserted.id,
+    duffelOrderId: orderId,
+  });
 
   return {
     success: true,
     booking_type: 'flight',
     order_id: orderId,
-    internal_booking_id: internalBooking.id,
+    booking_id: inserted.id,
   };
 }
 
-/**
- * Process failed flight creation.
- */
+/* ============================================================
+ * Flight: failed creation
+ * ============================================================ */
+
 async function processFlightFailed(
   event: DuffelWebhookEvent,
   supabaseAdmin: any,
 ) {
   const eventObject = event.data?.object ?? {};
 
-  const orderId = firstString(
-    eventObject?.order_id,
-    eventObject?.id,
-    event?.idempotency_key,
-  );
+  const orderId = firstString(eventObject?.order_id, eventObject?.id);
 
-  const reference = firstString(
-    eventObject?.metadata?.checkout_reference,
-    eventObject?.metadata?.booking_reference,
-    eventObject?.reference,
-  );
-
-  let internalBooking = orderId
-    ? await findByDuffelBookingId(supabaseAdmin, orderId)
-    : null;
+  const reference = extractAtlasReference(eventObject, eventObject);
 
   const parsedReference = parseAtlasReference(reference);
 
-  if (!internalBooking && parsedReference) {
-    internalBooking = await getInternalBooking(
-      supabaseAdmin,
-      parsedReference.internalBookingId,
-    );
-  }
+  console.log('Processing failed Duffel flight order.', {
+    orderId,
+    reference,
+  });
 
-  if (!internalBooking) {
-    console.error(
-      'Unable to associate failed flight booking with Atlas booking.',
+  /*
+   * If there is no actual Duffel order ID,
+   * we cannot satisfy the user_bookings.booking_id
+   * requirement without inventing an ID.
+   *
+   * Therefore don't insert a fake booking_id.
+   */
+  if (!orderId) {
+    console.warn(
+      'Flight creation failed without a Duffel order ID. No user_bookings row created.',
       {
-        orderId,
         reference,
       },
     );
 
     return {
+      success: true,
+      status: 'failure',
+      stored: false,
+      reason: 'missing_duffel_order_id',
+    };
+  }
+
+  /*
+   * If this order already exists, don't create another row.
+   */
+  const existing = await findByDuffelBookingId(supabaseAdmin, orderId);
+
+  if (existing) {
+    console.log('Failed flight event received for an existing booking.', {
+      orderId,
+      existingBookingId: existing.id,
+    });
+
+    return {
+      success: true,
+      status: 'failure',
+      duplicate: true,
+      booking_id: existing.id,
+    };
+  }
+
+  if (!parsedReference) {
+    console.error('Unable to parse Atlas reference for failed flight.', {
+      orderId,
+      reference,
+    });
+
+    return {
       success: false,
-      reason: 'internal_booking_not_found',
+      status: 'failure',
+      stored: false,
+      reason: 'invalid_atlas_reference',
       order_id: orderId,
     };
   }
 
-  await updateBooking(supabaseAdmin, internalBooking.id, {
+  if (parsedReference.bookingType !== 'flight') {
+    return {
+      success: false,
+      status: 'failure',
+      stored: false,
+      reason: 'reference_booking_type_mismatch',
+      order_id: orderId,
+    };
+  }
+
+  const fullName = await getFullName(supabaseAdmin, parsedReference.userId);
+
+  if (!fullName) {
+    throw new Error(
+      `Unable to determine Atlas full name for user ${parsedReference.userId}`,
+    );
+  }
+
+  const bookingReference = firstString(
+    eventObject?.booking_reference,
+    eventObject?.reference,
+  );
+
+  const inserted = await insertBooking(supabaseAdmin, {
+    user_id: parsedReference.userId,
+
+    booking_type: 'flight',
+
+    source: null,
+
+    destination: null,
+
+    booking_id: orderId,
+
     status: 'failure',
-    ...(orderId ? { booking_id: orderId } : {}),
+
+    booking_reference: bookingReference,
+
+    fullName,
+
+    updated_at: new Date().toISOString(),
+  });
+
+  if (!inserted) {
+    throw new Error(`Unable to create failed flight booking ${orderId}`);
+  }
+
+  return {
+    success: true,
+    status: 'failure',
+    stored: true,
+    booking_id: inserted.id,
+    order_id: orderId,
+  };
+}
+
+/* ============================================================
+ * Payment succeeded fallback
+ * ============================================================ */
+
+/**
+ * Some Duffel flows can emit air.payment.succeeded.
+ *
+ * IMPORTANT:
+ *
+ * A payment event is not itself a booking ID.
+ *
+ * We therefore only process this event when we can resolve
+ * the actual Duffel order ID from the payload.
+ *
+ * The actual booking is still stored using:
+ *
+ * booking_id = actual Duffel order ID
+ */
+async function processPaymentSucceeded(
+  event: DuffelWebhookEvent,
+  supabaseAdmin: any,
+  duffelApiKey: string,
+) {
+  const eventObject = event.data?.object ?? {};
+
+  const possibleOrderId = firstString(
+    eventObject?.order_id,
+    eventObject?.order?.id,
+    eventObject?.order?.order_id,
+    eventObject?.metadata?.order_id,
+  );
+
+  if (!possibleOrderId) {
+    console.log(
+      'air.payment.succeeded received without an order ID. No booking created.',
+    );
+
+    return {
+      success: true,
+      stored: false,
+      reason: 'payment_event_without_order_id',
+    };
+  }
+
+  /*
+   * Only treat this as a flight order if the resolved
+   * resource is actually an air order.
+   */
+  if (possibleOrderId.startsWith('ord_')) {
+    console.log(
+      'air.payment.succeeded resolved to Duffel order:',
+      possibleOrderId,
+    );
+
+    return await processFlightOrderById(
+      possibleOrderId,
+      event,
+      supabaseAdmin,
+      duffelApiKey,
+    );
+  }
+
+  console.log(
+    'air.payment.succeeded did not resolve to a Duffel flight order.',
+    {
+      possibleOrderId,
+    },
+  );
+
+  return {
+    success: true,
+    stored: false,
+    reason: 'not_a_flight_order',
+  };
+}
+
+/* ============================================================
+ * Shared flight processing
+ * ============================================================ */
+
+async function processFlightOrderById(
+  orderId: string,
+  event: DuffelWebhookEvent,
+  supabaseAdmin: any,
+  duffelApiKey: string,
+) {
+  const eventObject = event.data?.object ?? {};
+
+  const orderResponse = await duffelGet(
+    `/air/orders/${encodeURIComponent(orderId)}`,
+    duffelApiKey,
+  );
+
+  if (!orderResponse?.data) {
+    throw new Error(`Unable to fetch Duffel flight order ${orderId}`);
+  }
+
+  const order = orderResponse.data;
+
+  const reference = extractAtlasReference(order, eventObject);
+
+  const parsedReference = parseAtlasReference(reference);
+
+  if (!parsedReference) {
+    console.error('Unable to parse Atlas reference from Duffel order.', {
+      orderId,
+      reference,
+    });
+
+    return {
+      success: false,
+      reason: 'invalid_atlas_reference',
+      order_id: orderId,
+      reference,
+    };
+  }
+
+  if (parsedReference.bookingType !== 'flight') {
+    return {
+      success: false,
+      reason: 'reference_booking_type_mismatch',
+      order_id: orderId,
+      reference,
+    };
+  }
+
+  const existing = await findByDuffelBookingId(supabaseAdmin, orderId);
+
+  if (existing) {
+    console.log('Flight order already persisted.', {
+      orderId,
+      bookingId: existing.id,
+    });
+
+    return {
+      success: true,
+      duplicate: true,
+      order_id: orderId,
+      booking_id: existing.id,
+    };
+  }
+
+  const fullName = await getFullName(supabaseAdmin, parsedReference.userId);
+
+  if (!fullName) {
+    throw new Error(
+      `Unable to determine Atlas full name for user ${parsedReference.userId}`,
+    );
+  }
+
+  const details = extractFlightDetails(order);
+
+  const bookingReference = firstString(
+    order?.booking_reference,
+    order?.reference,
+  );
+
+  const inserted = await insertBooking(supabaseAdmin, {
+    user_id: parsedReference.userId,
+
+    booking_type: 'flight',
+
+    source: details.source,
+
+    destination: details.destination,
+
+    booking_id: orderId,
+
+    status: 'success',
+
+    booking_reference: bookingReference,
+
+    fullName,
+
+    departure_date: details.departure_date,
+
+    return_date: details.return_date,
+
+    airline: details.airline,
+
+    passenger_name: details.passenger_name,
+
+    price: details.price,
+
+    currency: details.currency,
+
+    updated_at: new Date().toISOString(),
+  });
+
+  if (!inserted) {
+    throw new Error(`Unable to insert flight booking ${orderId}`);
+  }
+
+  console.log('Flight order successfully persisted.', {
+    orderId,
+    bookingId: inserted.id,
+    userId: parsedReference.userId,
   });
 
   return {
     success: true,
     booking_type: 'flight',
-    status: 'failure',
-    internal_booking_id: internalBooking.id,
     order_id: orderId,
+    booking_id: inserted.id,
   };
 }
 
-/**
- * Process successful hotel/stay booking.
- */
+/* ============================================================
+ * Stay: successful booking
+ * ============================================================ */
+
 async function processStayCreated(
   event: DuffelWebhookEvent,
   supabaseAdmin: any,
@@ -789,24 +1349,24 @@ async function processStayCreated(
 ) {
   const eventObject = event.data?.object ?? {};
 
-  const bookingId = firstString(
-    eventObject?.id,
-    eventObject?.booking_id,
-    event?.idempotency_key,
-  );
+  const bookingId = firstString(eventObject?.id, eventObject?.booking_id);
 
   if (!bookingId) {
     throw new Error('Unable to determine Duffel stay booking ID');
   }
 
-  console.log('Processing stay booking:', bookingId);
+  console.log('Processing Duffel stay booking:', bookingId);
 
   const bookingResponse = await duffelGet(
     `/stays/bookings/${encodeURIComponent(bookingId)}`,
     duffelApiKey,
   );
 
-  const booking = bookingResponse?.data ?? eventObject;
+  if (!bookingResponse?.data) {
+    throw new Error(`Unable to fetch Duffel stay booking ${bookingId}`);
+  }
+
+  const booking = bookingResponse.data;
 
   const quoteId = firstString(booking?.quote_id, eventObject?.quote_id);
 
@@ -821,117 +1381,126 @@ async function processStayCreated(
     quote = quoteResponse?.data ?? null;
   }
 
+  const reference = extractAtlasReference(booking, eventObject);
+
+  const parsedReference = parseAtlasReference(reference);
+
+  if (!parsedReference) {
+    console.error('Unable to parse Atlas stay reference.', {
+      bookingId,
+      quoteId,
+      reference,
+    });
+
+    return {
+      success: false,
+      reason: 'invalid_atlas_reference',
+      booking_id: bookingId,
+      quote_id: quoteId,
+      reference,
+    };
+  }
+
+  if (parsedReference.bookingType !== 'hotel') {
+    return {
+      success: false,
+      reason: 'reference_booking_type_mismatch',
+      booking_id: bookingId,
+      reference,
+    };
+  }
+
+  const existing = await findByDuffelBookingId(supabaseAdmin, bookingId);
+
+  if (existing) {
+    console.log('Stay booking already exists. Skipping duplicate webhook.', {
+      bookingId,
+      existingBookingId: existing.id,
+    });
+
+    return {
+      success: true,
+      duplicate: true,
+      booking_id: bookingId,
+      internal_booking_id: existing.id,
+    };
+  }
+
+  const fullName = await getFullName(supabaseAdmin, parsedReference.userId);
+
+  if (!fullName) {
+    throw new Error(
+      `Unable to determine Atlas full name for user ${parsedReference.userId}`,
+    );
+  }
+
+  const details = extractHotelDetails(booking, quote);
+
   const bookingReference = firstString(
     booking?.reference,
     booking?.booking_reference,
   );
 
-  /*
-   * Our checkout reference may be stored in
-   * Duffel booking metadata.
-   */
-  const reference = firstString(
-    booking?.metadata?.checkout_reference,
-    booking?.metadata?.booking_reference,
-    eventObject?.metadata?.checkout_reference,
-    eventObject?.metadata?.booking_reference,
-  );
+  const inserted = await insertBooking(supabaseAdmin, {
+    user_id: parsedReference.userId,
 
-  let internalBooking = await findByDuffelBookingId(supabaseAdmin, bookingId);
-
-  const parsedReference = parseAtlasReference(reference);
-
-  if (!internalBooking && parsedReference) {
-    internalBooking = await getInternalBooking(
-      supabaseAdmin,
-      parsedReference.internalBookingId,
-    );
-  }
-
-  if (!internalBooking) {
-    console.error(
-      'Unable to associate Duffel stay booking with Atlas booking.',
-      {
-        bookingId,
-        quoteId,
-        reference,
-      },
-    );
-
-    return {
-      success: false,
-      reason: 'internal_booking_not_found',
-      booking_id: bookingId,
-      quote_id: quoteId,
-    };
-  }
-
-  const details = extractHotelDetails(booking, quote);
-
-  const updates: Record<string, unknown> = {
-    booking_id: bookingId,
     booking_type: 'hotel',
+
+    source: details.source,
+
+    destination: details.destination,
+
+    /*
+     * IMPORTANT:
+     *
+     * This is the REAL Duffel stay booking ID.
+     */
+    booking_id: bookingId,
+
     status: 'success',
-  };
 
-  if (bookingReference) {
-    updates.booking_reference = bookingReference;
+    booking_reference: bookingReference,
+
+    fullName,
+
+    departure_date: details.departure_date,
+
+    return_date: details.return_date,
+
+    hotel_name: details.hotel_name,
+
+    passenger_name: details.passenger_name,
+
+    price: details.price,
+
+    currency: details.currency,
+
+    updated_at: new Date().toISOString(),
+  });
+
+  if (!inserted) {
+    throw new Error(`Unable to insert hotel booking ${bookingId}`);
   }
 
-  if (details.source) {
-    updates.source = details.source;
-  }
-
-  if (details.destination) {
-    updates.destination = details.destination;
-  }
-
-  if (details.departure_date) {
-    updates.departure_date = details.departure_date;
-  }
-
-  if (details.return_date) {
-    updates.return_date = details.return_date;
-  }
-
-  if (details.hotel_name) {
-    updates.hotel_name = details.hotel_name;
-  }
-
-  if (details.passenger_name) {
-    updates.passenger_name = details.passenger_name;
-  }
-
-  if (details.price !== null) {
-    updates.price = details.price;
-  }
-
-  if (details.currency) {
-    updates.currency = details.currency;
-  }
-
-  const updated = await updateBooking(
-    supabaseAdmin,
-    internalBooking.id,
-    updates,
-  );
-
-  if (!updated) {
-    throw new Error(`Unable to update hotel booking ${internalBooking.id}`);
-  }
+  console.log('Stay booking successfully inserted into user_bookings.', {
+    bookingId,
+    internalBookingId: inserted.id,
+    userId: parsedReference.userId,
+  });
 
   return {
     success: true,
     booking_type: 'hotel',
     booking_id: bookingId,
+    internal_booking_id: inserted.id,
     quote_id: quoteId,
-    internal_booking_id: internalBooking.id,
   };
 }
 
-/**
- * Process failed hotel/stay booking.
- */
+/* ============================================================
+ * Stay: failed booking
+ * ============================================================ */
+
 async function processStayFailed(
   event: DuffelWebhookEvent,
   supabaseAdmin: any,
@@ -942,74 +1511,130 @@ async function processStayFailed(
 
   const quoteId = firstString(eventObject?.quote_id);
 
-  const reference = firstString(
-    eventObject?.metadata?.checkout_reference,
-    eventObject?.metadata?.booking_reference,
-  );
-
-  let internalBooking = bookingId
-    ? await findByDuffelBookingId(supabaseAdmin, bookingId)
-    : null;
+  const reference = extractAtlasReference(eventObject, eventObject);
 
   const parsedReference = parseAtlasReference(reference);
 
-  if (!internalBooking && parsedReference) {
-    internalBooking = await getInternalBooking(
-      supabaseAdmin,
-      parsedReference.internalBookingId,
-    );
-  }
-
   /*
-   * For stays.booking_creation_failed Duffel's payload
-   * may only contain quote_id, so we cannot always identify
-   * the internal record from the webhook alone.
+   * A failed stay event may not contain an actual
+   * Duffel booking ID.
+   *
+   * Do not invent one.
    */
-  if (!internalBooking && quoteId) {
+  if (!bookingId) {
     console.warn(
-      'Stay creation failed but no internal booking could be matched.',
+      'Stay creation failed without a Duffel booking ID. No user_bookings row created.',
       {
-        bookingId,
         quoteId,
+        reference,
       },
     );
 
     return {
-      success: false,
-      reason: 'internal_booking_not_found',
-      booking_id: bookingId,
+      success: true,
+      status: 'failure',
+      stored: false,
+      reason: 'missing_duffel_booking_id',
       quote_id: quoteId,
     };
   }
 
-  if (!internalBooking) {
+  const existing = await findByDuffelBookingId(supabaseAdmin, bookingId);
+
+  if (existing) {
+    console.log('Failed stay event received for an existing booking.', {
+      bookingId,
+      existingBookingId: existing.id,
+    });
+
+    return {
+      success: true,
+      status: 'failure',
+      duplicate: true,
+      booking_id: existing.id,
+    };
+  }
+
+  if (!parsedReference) {
+    console.error('Unable to parse Atlas reference for failed stay.', {
+      bookingId,
+      quoteId,
+      reference,
+    });
+
     return {
       success: false,
-      reason: 'internal_booking_not_found',
+      status: 'failure',
+      stored: false,
+      reason: 'invalid_atlas_reference',
       booking_id: bookingId,
-      quote_id: quoteId,
     };
   }
 
-  await updateBooking(supabaseAdmin, internalBooking.id, {
+  if (parsedReference.bookingType !== 'hotel') {
+    return {
+      success: false,
+      status: 'failure',
+      stored: false,
+      reason: 'reference_booking_type_mismatch',
+      booking_id: bookingId,
+    };
+  }
+
+  const fullName = await getFullName(supabaseAdmin, parsedReference.userId);
+
+  if (!fullName) {
+    throw new Error(
+      `Unable to determine Atlas full name for user ${parsedReference.userId}`,
+    );
+  }
+
+  const bookingReference = firstString(
+    eventObject?.booking_reference,
+    eventObject?.reference,
+  );
+
+  const inserted = await insertBooking(supabaseAdmin, {
+    user_id: parsedReference.userId,
+
+    booking_type: 'hotel',
+
+    source: null,
+
+    destination: null,
+
+    booking_id: bookingId,
+
     status: 'failure',
-    ...(bookingId ? { booking_id: bookingId } : {}),
+
+    booking_reference: bookingReference,
+
+    fullName,
+
+    updated_at: new Date().toISOString(),
   });
+
+  if (!inserted) {
+    throw new Error(`Unable to insert failed hotel booking ${bookingId}`);
+  }
 
   return {
     success: true,
-    booking_type: 'hotel',
     status: 'failure',
-    internal_booking_id: internalBooking.id,
-    booking_id: bookingId,
+    stored: true,
+    booking_id: inserted.id,
+    duffel_booking_id: bookingId,
     quote_id: quoteId,
   };
 }
 
+/* ============================================================
+ * Main webhook handler
+ * ============================================================ */
+
 Deno.serve(async (req: Request) => {
-  /*
-   * Duffel sends POST requests.
-   */
+  console.log('========== DUFFEL WEBHOOK RECEIVED ==========');
+
   if (req.method === 'OPTIONS') {
     return new Response('ok', {
       status: 200,
@@ -1033,10 +1658,7 @@ Deno.serve(async (req: Request) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
 
-  const supabaseServiceKey =
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ??
-    Deno.env.get('SUPABASE_SECRET_KEY') ??
-    Deno.env.get('SUPABASE_SECRET_KEYS');
+  const supabaseServiceKey = resolveSupabaseServiceKey();
 
   if (!webhookSecret) {
     console.error('DUFFEL_WEBHOOK_SECRET is not configured');
@@ -1075,8 +1697,7 @@ Deno.serve(async (req: Request) => {
   }
 
   /*
-   * IMPORTANT:
-   * Read the body exactly once and before JSON parsing.
+   * Read the raw body exactly once.
    */
   const rawBody = await req.text();
 
@@ -1094,6 +1715,9 @@ Deno.serve(async (req: Request) => {
     );
   }
 
+  /*
+   * Verify signature before parsing JSON.
+   */
   const signatureValid = await verifyDuffelSignature(
     rawBody,
     signature,
@@ -1145,16 +1769,13 @@ Deno.serve(async (req: Request) => {
     },
   });
 
-  /*
-   * Ignore unsupported events but return 200.
-   *
-   * Duffel retries failed deliveries, so returning 200
-   * for events we intentionally don't process prevents
-   * unnecessary retries.
-   */
-  switch (event.type) {
-    case 'order.created': {
-      try {
+  try {
+    switch (event.type) {
+      /* ======================================================
+       * Flight booking created
+       * ====================================================== */
+
+      case 'order.created': {
         const result = await processFlightCreated(
           event,
           supabaseAdmin,
@@ -1166,25 +1787,13 @@ Deno.serve(async (req: Request) => {
           event_type: event.type,
           result,
         });
-      } catch (error) {
-        console.error('Failed to process order.created:', error);
-
-        return jsonResponse(
-          {
-            success: false,
-            event_type: event.type,
-            error:
-              error instanceof Error
-                ? error.message
-                : 'Failed to process flight booking',
-          },
-          500,
-        );
       }
-    }
 
-    case 'order.creation_failed': {
-      try {
+      /* ======================================================
+       * Flight booking failed
+       * ====================================================== */
+
+      case 'order.creation_failed': {
         const result = await processFlightFailed(event, supabaseAdmin);
 
         return jsonResponse({
@@ -1192,25 +1801,13 @@ Deno.serve(async (req: Request) => {
           event_type: event.type,
           result,
         });
-      } catch (error) {
-        console.error('Failed to process order.creation_failed:', error);
-
-        return jsonResponse(
-          {
-            success: false,
-            event_type: event.type,
-            error:
-              error instanceof Error
-                ? error.message
-                : 'Failed to process failed flight booking',
-          },
-          500,
-        );
       }
-    }
 
-    case 'stays.booking.created': {
-      try {
+      /* ======================================================
+       * Hotel booking created
+       * ====================================================== */
+
+      case 'stays.booking.created': {
         const result = await processStayCreated(
           event,
           supabaseAdmin,
@@ -1222,25 +1819,13 @@ Deno.serve(async (req: Request) => {
           event_type: event.type,
           result,
         });
-      } catch (error) {
-        console.error('Failed to process stays.booking.created:', error);
-
-        return jsonResponse(
-          {
-            success: false,
-            event_type: event.type,
-            error:
-              error instanceof Error
-                ? error.message
-                : 'Failed to process hotel booking',
-          },
-          500,
-        );
       }
-    }
 
-    case 'stays.booking_creation_failed': {
-      try {
+      /* ======================================================
+       * Hotel booking failed
+       * ====================================================== */
+
+      case 'stays.booking_creation_failed': {
         const result = await processStayFailed(event, supabaseAdmin);
 
         return jsonResponse({
@@ -1248,34 +1833,56 @@ Deno.serve(async (req: Request) => {
           event_type: event.type,
           result,
         });
-      } catch (error) {
-        console.error(
-          'Failed to process stays.booking_creation_failed:',
-          error,
+      }
+
+      /* ======================================================
+       * Payment succeeded
+       * ====================================================== */
+
+      case 'air.payment.succeeded': {
+        const result = await processPaymentSucceeded(
+          event,
+          supabaseAdmin,
+          duffelApiKey,
         );
 
-        return jsonResponse(
-          {
-            success: false,
-            event_type: event.type,
-            error:
-              error instanceof Error
-                ? error.message
-                : 'Failed to process failed hotel booking',
-          },
-          500,
-        );
+        return jsonResponse({
+          success: true,
+          event_type: event.type,
+          result,
+        });
+      }
+
+      /* ======================================================
+       * Other events
+       * ====================================================== */
+
+      default: {
+        console.log(`Ignoring unsupported Duffel event: ${event.type}`);
+
+        return jsonResponse({
+          success: true,
+          ignored: true,
+          event_type: event.type ?? null,
+        });
       }
     }
+  } catch (error) {
+    console.error('========== DUFFEL WEBHOOK PROCESSING ERROR ==========');
 
-    default: {
-      console.log(`Ignoring unsupported Duffel event: ${event.type}`);
+    console.error(error instanceof Error ? error.message : String(error));
 
-      return jsonResponse({
-        success: true,
-        ignored: true,
+    /*
+     * Return 500 so Duffel can retry the event.
+     */
+    return jsonResponse(
+      {
+        success: false,
         event_type: event.type ?? null,
-      });
-    }
+        error:
+          error instanceof Error ? error.message : 'Webhook processing failed',
+      },
+      500,
+    );
   }
 });

@@ -677,43 +677,6 @@ export const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.accentBorder,
   },
-  resultCardEnhanced: {
-    backgroundColor: colors.white,
-    borderRadius: 18,
-    padding: 16,
-    marginTop: 12,
-    shadowColor: colors.charcoal,
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
-    borderWidth: 1,
-    borderColor: colors.accentBorder,
-  },
-  resultCardTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
-  },
-  resultTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.charcoal,
-    letterSpacing: -0.2,
-  },
-  resultMeta: {
-    marginTop: 5,
-    color: colors.slateGray,
-    fontSize: 13,
-    lineHeight: 19,
-  },
-  resultPrice: {
-    color: colors.navy,
-    fontWeight: '700',
-    fontSize: 16,
-    letterSpacing: 0.3,
-  },
   badgeRow: {
     flexDirection: 'row',
     gap: 8,
@@ -1382,6 +1345,99 @@ export const styles = StyleSheet.create({
   brandLogo: {
     width: 80,
     height: 80,
+  },
+  resultCardEnhanced: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    marginBottom: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    overflow: 'hidden',
+  },
+
+  resultCardTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+
+  resultTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+  },
+
+  resultMeta: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#6B7280',
+  },
+
+  resultPrice: {
+    marginLeft: 12,
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+  },
+
+  reasonContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginTop: 14,
+    marginBottom: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderRadius: 10,
+    backgroundColor: '#FFF9E8',
+    borderWidth: 1,
+    borderColor: '#F3E8C0',
+  },
+
+  reasonIconContainer: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF1B8',
+  },
+
+  reasonContent: {
+    flex: 1,
+    marginLeft: 9,
+  },
+
+  reasonLabel: {
+    marginBottom: 2,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    color: '#7C5C00',
+    textTransform: 'uppercase',
+  },
+
+  reasonText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#5F4B16',
+  },
+  resultCardBottom: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  badgeContainer: {
+    flex: 1,
+  },
+  resultMapButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 10,
+    backgroundColor: '#F3F4F6',
   },
 });
 

@@ -99,6 +99,8 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    console.log('Authenticated user:', user.id);
+
     // ---------------------------------------------------------
     // Parse request
     // ---------------------------------------------------------
@@ -132,107 +134,39 @@ Deno.serve(async (req: Request) => {
     const isFlight = body.type === 'flight';
 
     // ---------------------------------------------------------
-    // Get user's profile
+    // Build a reference for the Duffel session.
     //
-    // Your profiles table uses full_name.
-    // user_bookings requires "fullName".
-    // ---------------------------------------------------------
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('full_name')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    if (profileError) {
-      console.error('Failed to fetch profile:', profileError);
-
-      return jsonResponse(
-        {
-          success: false,
-          error: 'Unable to fetch user profile.',
-          details: profileError.message,
-        },
-        500,
-      );
-    }
-
-    const fullName =
-      typeof profile?.full_name === 'string' ? profile.full_name.trim() : '';
-
-    if (!fullName) {
-      return jsonResponse(
-        {
-          success: false,
-          error: 'Your profile does not contain a full name.',
-        },
-        400,
-      );
-    }
-
-    // ---------------------------------------------------------
-    // Generate the UUID that will become user_bookings.id
+    // IMPORTANT:
     //
-    // We explicitly supply this UUID during INSERT so that
-    // the same ID can be embedded in the Duffel reference.
-    // ---------------------------------------------------------
-    const bookingRecordId = crypto.randomUUID();
-
-    // ---------------------------------------------------------
-    // Temporary booking_id
+    // We are NOT creating a user_bookings record here.
     //
-    // booking_id is NOT NULL in your schema.
+    // The actual booking/order does not exist yet.
     //
-    // We initially use the internal Atlas booking ID.
-    // Once Duffel creates the Links session, this field is
-    // updated to the actual Duffel session ID.
+    // The reference contains the authenticated Atlas user ID
+    // and a unique request ID. The webhook will use this
+    // reference when the actual Duffel order is created.
     // ---------------------------------------------------------
-    const temporaryBookingId = `ATLAS_${body.type.toUpperCase()}_${bookingRecordId}`;
+    const requestId = crypto.randomUUID();
 
-    // ---------------------------------------------------------
-    // Create initial processing booking
-    // ---------------------------------------------------------
-    const { data: bookingRecord, error: bookingInsertError } = await supabase
-      .from('user_bookings')
-      .insert({
-        id: bookingRecordId,
-        user_id: user.id,
-        booking_type: body.type,
-        booking_id: temporaryBookingId,
-        status: 'processing',
-        fullName: fullName,
-      })
-      .select()
-      .single();
+    const reference = `ATLAS_${body.type.toUpperCase()}_${
+      user.id
+    }_${requestId}`;
 
-    if (bookingInsertError || !bookingRecord) {
-      console.error(
-        'Failed to create user_bookings record:',
-        bookingInsertError,
-      );
-
-      return jsonResponse(
-        {
-          success: false,
-          error: 'Unable to create booking record.',
-          details: bookingInsertError?.message ?? 'Unknown database error.',
-        },
-        500,
-      );
-    }
-
-    // ---------------------------------------------------------
-    // Build Atlas reference
-    //
-    // This UUID is now guaranteed to exist in
-    // user_bookings.id.
-    // ---------------------------------------------------------
-    const reference = `ATLAS_${body.type.toUpperCase()}_${user.id}_${
-      bookingRecord.id
-    }`;
+    console.log('Duffel checkout reference:', reference);
 
     // ---------------------------------------------------------
     // Checkout callback URLs
     // ---------------------------------------------------------
+    //
+    // These URLs are ONLY for redirecting the hosted checkout
+    // back to Atlas.
+    //
+    // The callback does NOT become the source of truth for
+    // booking creation.
+    //
+    // The Duffel webhook will handle the actual booking.
+    // ---------------------------------------------------------
+
     const successUrl =
       `${supabaseUrl}/functions/v1/duffel-checkout-callback` +
       `?status=success`;
@@ -248,15 +182,23 @@ Deno.serve(async (req: Request) => {
     // ---------------------------------------------------------
     // Configure Duffel Links
     // ---------------------------------------------------------
+    //
+    // 12% Atlas markup.
+    //
+    // Flights are enabled for flight checkout.
+    // Stays are enabled for hotel checkout.
+    // ---------------------------------------------------------
+
     const duffelPayload = {
       data: {
         reference,
 
         success_url: successUrl,
+
         failure_url: failureUrl,
+
         abandonment_url: abandonmentUrl,
 
-        // 12% Atlas markup
         markup_rate: '0.12',
 
         flights: {
@@ -271,7 +213,6 @@ Deno.serve(async (req: Request) => {
 
     console.log('Creating Duffel checkout session:', {
       user_id: user.id,
-      booking_record_id: bookingRecord.id,
       type: body.type,
       reference,
     });
@@ -279,15 +220,22 @@ Deno.serve(async (req: Request) => {
     // ---------------------------------------------------------
     // Create Duffel Links session
     // ---------------------------------------------------------
+
     const duffelResponse = await fetch(DUFFEL_API_URL, {
       method: 'POST',
+
       headers: {
         Accept: 'application/json',
+
         'Accept-Encoding': 'gzip',
+
         'Content-Type': 'application/json',
+
         'Duffel-Version': 'v2',
+
         Authorization: `Bearer ${duffelApiKey}`,
       },
+
       body: JSON.stringify(duffelPayload),
     });
 
@@ -304,28 +252,22 @@ Deno.serve(async (req: Request) => {
     // ---------------------------------------------------------
     // Handle Duffel error
     // ---------------------------------------------------------
+
     if (!duffelResponse.ok) {
       console.error('Duffel Links API error:', {
         status: duffelResponse.status,
+
         response: duffelResponseData ?? duffelResponseText,
-        booking_record_id: bookingRecord.id,
+
         reference,
       });
-
-      // Mark our booking as failed because the
-      // checkout session itself could not be created.
-      await supabase
-        .from('user_bookings')
-        .update({
-          status: 'failure',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', bookingRecord.id);
 
       return jsonResponse(
         {
           success: false,
+
           error: 'Unable to create Duffel checkout session.',
+
           details: duffelResponseData,
         },
         502,
@@ -335,6 +277,7 @@ Deno.serve(async (req: Request) => {
     // ---------------------------------------------------------
     // Extract Duffel session
     // ---------------------------------------------------------
+
     const session = duffelResponseData?.data;
 
     if (!session) {
@@ -343,17 +286,10 @@ Deno.serve(async (req: Request) => {
         duffelResponseData,
       );
 
-      await supabase
-        .from('user_bookings')
-        .update({
-          status: 'failure',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', bookingRecord.id);
-
       return jsonResponse(
         {
           success: false,
+
           error: 'Duffel returned an invalid session response.',
         },
         502,
@@ -363,22 +299,16 @@ Deno.serve(async (req: Request) => {
     // ---------------------------------------------------------
     // Extract hosted checkout URL
     // ---------------------------------------------------------
+
     const checkoutUrl = session.url ?? session.link ?? session.href;
 
     if (!checkoutUrl) {
       console.error('Duffel session did not contain a hosted URL:', session);
 
-      await supabase
-        .from('user_bookings')
-        .update({
-          status: 'failure',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', bookingRecord.id);
-
       return jsonResponse(
         {
           success: false,
+
           error: 'Duffel session was created but no hosted URL was returned.',
         },
         502,
@@ -386,97 +316,51 @@ Deno.serve(async (req: Request) => {
     }
 
     // ---------------------------------------------------------
-    // Get actual Duffel session ID
+    // IMPORTANT
     // ---------------------------------------------------------
-    const duffelSessionId = typeof session.id === 'string' ? session.id : null;
-
-    if (!duffelSessionId) {
-      console.error('Duffel session did not contain an ID:', session);
-
-      await supabase
-        .from('user_bookings')
-        .update({
-          status: 'failure',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', bookingRecord.id);
-
-      return jsonResponse(
-        {
-          success: false,
-          error: 'Duffel session was created but no session ID was returned.',
-        },
-        502,
-      );
-    }
-
+    //
+    // We intentionally DO NOT:
+    //
+    // - create a user_bookings row
+    // - generate a booking database ID
+    // - store a Duffel session ID as booking_id
+    // - mark anything as processing
+    //
+    // At this point there is no Duffel order yet.
+    //
+    // The actual booking record will be created by the
+    // webhook after Duffel creates the real order.
     // ---------------------------------------------------------
-    // Update booking_id with actual Duffel session ID
-    // ---------------------------------------------------------
-    const { error: bookingUpdateError } = await supabase
-      .from('user_bookings')
-      .update({
-        booking_id: duffelSessionId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', bookingRecord.id);
 
-    if (bookingUpdateError) {
-      console.error(
-        'Failed to update booking with Duffel session ID:',
-        bookingUpdateError,
-      );
-
-      /*
-       * We deliberately mark the booking as failure here.
-       *
-       * The Duffel session exists, but Atlas was unable to
-       * persist its session ID.
-       */
-      await supabase
-        .from('user_bookings')
-        .update({
-          status: 'failure',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', bookingRecord.id);
-
-      return jsonResponse(
-        {
-          success: false,
-          error:
-            'Duffel session was created but the booking record could not be updated.',
-        },
-        500,
-      );
-    }
-
-    // ---------------------------------------------------------
-    // Final response to the mobile app
-    // ---------------------------------------------------------
     console.log('Duffel checkout session created successfully:', {
       user_id: user.id,
-      booking_record_id: bookingRecord.id,
-      duffel_session_id: duffelSessionId,
-      reference,
+
       type: body.type,
+
+      reference,
+
+      session_id: typeof session.id === 'string' ? session.id : null,
     });
+
+    // ---------------------------------------------------------
+    // Return checkout information to the mobile app
+    // ---------------------------------------------------------
 
     return jsonResponse({
       success: true,
+
       type: body.type,
 
-      // Duffel Links session ID
-      session_id: duffelSessionId,
-
-      // Atlas booking row ID
-      booking_id: bookingRecord.id,
-
-      // Reference passed to Duffel
-      reference,
-
-      // Hosted checkout URL
+      // Hosted Duffel checkout URL
       url: checkoutUrl,
+
+      // Keep this available for debugging / tracking,
+      // but this is NOT the booking_id.
+      session_id: typeof session.id === 'string' ? session.id : null,
+
+      // Atlas reference used to associate the eventual
+      // Duffel order with the authenticated user.
+      reference,
     });
   } catch (error) {
     console.error('duffel-checkout-session error:', error);
@@ -484,6 +368,7 @@ Deno.serve(async (req: Request) => {
     return jsonResponse(
       {
         success: false,
+
         error:
           error instanceof Error ? error.message : 'Unexpected server error.',
       },

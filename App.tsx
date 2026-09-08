@@ -20,7 +20,6 @@ function App() {
       <AppStripeProvider>
         <AuthProvider>
           <StatusBar barStyle="dark-content" backgroundColor="#F5F7FB" />
-
           <AppContent />
         </AuthProvider>
       </AppStripeProvider>

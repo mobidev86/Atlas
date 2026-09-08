@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
-  TextInput,
   ActivityIndicator,
   TouchableOpacity,
   StyleSheet,
@@ -14,16 +13,15 @@ import { useNavigation } from '@react-navigation/native';
 
 import styles from '../styles/styles';
 import { ResultCard, PrimaryButton } from '../components';
+import { VoiceSearchInput } from '../components/VoiceSearchInput';
 import { BookingCard, UserBooking } from '../components/BookingCard';
 import { BookingBridge } from '../components/BookingBridge';
 import { InAppWebView } from '../components/InAppWebview';
 import { SearchResult, FlightOption, HotelOption } from '../types';
 import { useAuth } from '../context/AuthContext';
 import Ionicons from '@react-native-vector-icons/ionicons';
-import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { supabase } from '../services/supabase';
 import { MessageToast } from '../services/messageToast';
-import AudioWaveform from '../components/AudioWaveform';
 import { DuffelCheckoutService } from '../services/DuffelCheckoutService';
 
 import {
@@ -66,30 +64,53 @@ const TEST_DUFFEL_OFFER_ID = 'off_0000B9gn5qFoFIiOgejCrc';
 export function TravelScreen({ onBook }: TravelScreenProps) {
   const { user } = useAuth();
   const navigation = useNavigation<any>();
+
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<SearchResult[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
   const [searchType, setSearchType] = useState<'flight' | 'hotel' | null>(null);
+
   const [pendingBooking, setPendingBooking] = useState<PendingBooking | null>(
     null,
   );
+
   const [selectedFlight, setSelectedFlight] = useState<FlightOption | null>(
     null,
   );
+
   const [componentClientKey, setComponentClientKey] = useState<string | null>(
     null,
   );
+
   const [showCardForm, setShowCardForm] = useState(false);
   const [cardValid, setCardValid] = useState(false);
   const [creatingCard, setCreatingCard] = useState(false);
   const [cardError, setCardError] = useState<string | null>(null);
-  const autoStopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [isDuffelLoading, setIsDuffelLoading] = useState(false);
+
   const [showInAppWebView, setShowInAppWebView] = useState(false);
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+
   const [isFinalizingDuffelBooking, setIsFinalizingDuffelBooking] =
     useState(false);
+
+  /**
+   * True while VoiceSearchInput is recording/transcribing.
+   *
+   * This is NOT the visible "Processing your request..." state.
+   */
+  const [isVoiceProcessing, setIsVoiceProcessing] = useState(false);
+
+  /**
+   * True ONLY while TravelScreen is executing
+   * determineBookingIntent / parseTravelIntent.
+   *
+   * This is the state that controls the visible
+   * "Processing your request..." label.
+   */
+  const [isIntentProcessing, setIsIntentProcessing] = useState(false);
 
   /**
    * -----------------------------------------
@@ -99,16 +120,6 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
   const [bookings, setBookings] = useState<UserBooking[]>([]);
   const [bookingsLoading, setBookingsLoading] = useState(false);
   const [bookingsError, setBookingsError] = useState<string | null>(null);
-
-  const {
-    isRecording,
-    isPreparingToListen,
-    isTranscribing,
-    text,
-    startRecording,
-    stopRecording,
-    volumeLevel,
-  } = useAudioRecorder(setPrompt);
 
   const { ref: cardFormRef, createCardForTemporaryUse } =
     useDuffelCardFormActions();
@@ -147,6 +158,7 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
         setBookingsError('Unable to load your bookings.');
         return;
       }
+
       setBookings((data ?? []) as UserBooking[]);
     } catch (error) {
       console.error('FETCH USER BOOKINGS EXCEPTION:', error);
@@ -162,72 +174,6 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
   useEffect(() => {
     fetchBookings();
   }, [fetchBookings]);
-
-  /**
-   * -----------------------------------------
-   * Fetch Duffel Client Key
-   * -----------------------------------------
-   */
-  // useEffect(() => {
-  //   const fetchDuffelClientKey = async () => {
-  //     try {
-  //       const { data, error } = await supabase.functions.invoke(
-  //         'duffel-client-key',
-  //       );
-  //       console.log('DUFFEL CLIENT KEY RESPONSE:', JSON.stringify(data));
-  //       if (error) {
-  //         showError(
-  //           error.message || 'Unable to initialize Duffel checkout.',
-  //           'Checkout Error',
-  //         );
-  //         return;
-  //       }
-  //       const clientKey =
-  //         data?.clientKey ??
-  //         data?.component_client_key ??
-  //         data?.data?.component_client_key ??
-  //         null;
-  //       if (!clientKey) {
-  //         console.error('DUFFEL CLIENT KEY MISSING:', data);
-  //         showError(
-  //           'Duffel checkout could not be initialized.',
-  //           'Checkout Error',
-  //         );
-  //         return;
-  //       }
-  //       setComponentClientKey(clientKey);
-  //       console.log('DUFFEL CLIENT KEY INITIALIZED');
-  //     } catch (error) {
-  //       console.error('DUFFEL CLIENT KEY EXCEPTION:', error);
-  //       showError('Unable to initialize Duffel checkout.', 'Checkout Error');
-  //     }
-  //   };
-
-  //   fetchDuffelClientKey();
-  // }, []);
-
-  /**
-   * -----------------------------------------
-   * Microphone
-   * -----------------------------------------
-   */
-  const handleMicPress = async () => {
-    try {
-      if (isRecording) {
-        await stopRecording();
-      } else {
-        setPrompt('');
-        await startRecording();
-      }
-    } catch (error) {
-      console.error('Recording error:', error);
-
-      showError(
-        'Unable to start recording. Please try again.',
-        'Recording Error',
-      );
-    }
-  };
 
   /**
    * -----------------------------------------
@@ -328,30 +274,45 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
    * -----------------------------------------
    * Automatically determine booking CTA
    * -----------------------------------------
+   *
+   * IMPORTANT:
+   *
+   * The visible processing state starts ONLY here,
+   * immediately before parseTravelIntent().
+   *
+   * Starting the microphone does NOT show the
+   * "Processing your request..." label.
    */
   useEffect(() => {
     const determineBookingIntent = async () => {
       const travelPrompt = prompt.trim();
 
-      if (!travelPrompt || isRecording || isTranscribing) {
+      if (!travelPrompt || isVoiceProcessing) {
         return;
       }
 
-      const travelIntent = await parseTravelIntent(travelPrompt);
+      setIsIntentProcessing(true);
 
-      if (!travelIntent) {
-        return;
-      }
+      try {
+        const travelIntent = await parseTravelIntent(travelPrompt);
 
-      if (travelIntent.type === 'flight' || travelIntent.type === 'hotel') {
-        setSearchType(travelIntent.type);
-      } else {
-        setSearchType(null);
+        if (!travelIntent) {
+          setSearchType(null);
+          return;
+        }
+
+        if (travelIntent.type === 'flight' || travelIntent.type === 'hotel') {
+          setSearchType(travelIntent.type);
+        } else {
+          setSearchType(null);
+        }
+      } finally {
+        setIsIntentProcessing(false);
       }
     };
 
     determineBookingIntent();
-  }, [prompt, isRecording, isTranscribing]);
+  }, [prompt, isVoiceProcessing]);
 
   /**
    * -----------------------------------------
@@ -451,6 +412,7 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
           intent: travelIntent,
         },
       });
+
       console.log('TRAVEL SEARCH ERROR:', JSON.stringify(error));
 
       if (error) {
@@ -493,6 +455,7 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
 
         return;
       }
+
       showError('Unsupported travel search type.', 'Travel Search Error');
     } catch (error) {
       console.error('TRAVEL SEARCH EXCEPTION:', error);
@@ -544,16 +507,22 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
     try {
       setCreatingCard(true);
       setCardError(null);
+
       console.log('Client key exists:', !!componentClientKey);
+
       createCardForTemporaryUse();
     } catch (error) {
       console.error('DUFFEL CARD: CREATE CARD EXCEPTION');
+
       setCreatingCard(false);
+
       let errorMessage = 'Unable to create the temporary card.';
+
       if (error instanceof Error) {
         errorMessage = error.message;
       } else if (error && typeof error === 'object') {
         const possibleError = error as unknown as Record<string, unknown>;
+
         errorMessage = String(
           possibleError.message ??
             possibleError.error ??
@@ -563,7 +532,9 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
       } else if (typeof error === 'string') {
         errorMessage = error;
       }
+
       console.error('DUFFEL CARD EXCEPTION MESSAGE:', errorMessage);
+
       setCardError(errorMessage);
     }
   };
@@ -669,9 +640,6 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
       console.log('ORDER ID:', orderId);
       console.log('REFERENCE:', reference);
 
-      /**
-       * SUCCESS
-       */
       if (status === 'success') {
         if (!orderId || !reference) {
           console.error('Duffel callback missing order_id or reference.');
@@ -724,18 +692,11 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
 
         console.log('DESTINATION:', result.destination);
 
-        /**
-         * Close WebView after successful finalization.
-         */
         setIsFinalizingDuffelBooking(false);
 
         setShowInAppWebView(false);
         setCheckoutUrl(null);
 
-        /**
-         * Refresh bookings so the newly created
-         * booking appears immediately.
-         */
         await fetchBookings();
 
         showSuccess('Your booking was completed successfully.');
@@ -743,9 +704,6 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
         return;
       }
 
-      /**
-       * FAILURE
-       */
       if (status === 'failure') {
         console.log('Duffel checkout failed.');
 
@@ -757,9 +715,6 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
         return;
       }
 
-      /**
-       * ABANDONED
-       */
       if (status === 'abandoned') {
         console.log('Duffel checkout abandoned.');
 
@@ -771,9 +726,6 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
         return;
       }
 
-      /**
-       * UNKNOWN
-       */
       console.warn('Unknown Duffel callback status:', status);
 
       setShowInAppWebView(false);
@@ -789,30 +741,6 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
       showError('Unable to finalize your booking.');
     }
   };
-
-  /**
-   * -----------------------------------------
-   * Cleanup audio timer
-   * -----------------------------------------
-   */
-  useEffect(() => {
-    return () => {
-      if (autoStopTimer.current) {
-        clearTimeout(autoStopTimer.current);
-      }
-    };
-  }, []);
-
-  /**
-   * -----------------------------------------
-   * Transcription → Prompt
-   * -----------------------------------------
-   */
-  useEffect(() => {
-    if (!isRecording && text) {
-      setPrompt(text);
-    }
-  }, [isRecording, text]);
 
   /**
    * -----------------------------------------
@@ -842,11 +770,6 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
           : 'Your booking details',
     };
 
-    /**
-     * TravelScreen is inside MainTabs.
-     * Confirm is registered on the RootStack,
-     * so navigate through the parent navigator.
-     */
     const parentNavigation = navigation.getParent();
 
     if (parentNavigation) {
@@ -858,10 +781,6 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
       return;
     }
 
-    /**
-     * Fallback in case TravelScreen is ever
-     * rendered directly inside the root navigator.
-     */
     navigation.navigate('Confirm', {
       confirmation,
       booking,
@@ -882,92 +801,31 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
         showsVerticalScrollIndicator={false}
       >
         {/* ---------------------------------- */}
-        {/* Search Box */}
+        {/* Reusable Search Input */}
         {/* ---------------------------------- */}
 
-        <View
-          style={[
-            styles.searchBox,
-            screenStyles.searchBoxLayout,
-            isRecording && screenStyles.recordingSearchBox,
-          ]}
-        >
-          <View style={screenStyles.inputRow}>
-            <TextInput
-              style={[styles.searchInput, screenStyles.recordingInput]}
-              placeholder={
-                isPreparingToListen
-                  ? 'Getting ready to listen...'
-                  : isRecording || isTranscribing
-                  ? 'Listening...'
-                  : "Say or type: 'Flight to Dubai next Tuesday'"
-              }
-              placeholderTextColor="#8A95A6"
-              value={prompt}
-              onChangeText={value => {
-                setPrompt(value);
+        <VoiceSearchInput
+          value={prompt}
+          onChangeText={value => {
+            setPrompt(value);
 
-                if (!value.trim()) {
-                  setSearchType(null);
-                }
-              }}
-              editable={!isRecording}
-              returnKeyType="search"
-              multiline
-              numberOfLines={2}
-              textAlignVertical="top"
-            />
-
-            {!isRecording && prompt.trim().length > 0 && (
-              <TouchableOpacity
-                onPress={() => {
-                  setPrompt('');
-                  setSearchType(null);
-                  setSelectedFlight(null);
-                }}
-                style={screenStyles.closeButton}
-                hitSlop={8}
-              >
-                <Ionicons name="close-circle" size={20} color="#8A95A6" />
-              </TouchableOpacity>
-            )}
-          </View>
-
-          <View style={screenStyles.bottomRow}>
-            {isRecording ? (
-              <View style={screenStyles.waveformWrapper}>
-                <AudioWaveform volume={volumeLevel} isRecording={isRecording} />
-              </View>
-            ) : (
-              <View style={screenStyles.emptyWaveformSpace} />
-            )}
-
-            <TouchableOpacity
-              onPress={handleMicPress}
-              style={screenStyles.micButton}
-              hitSlop={8}
-            >
-              <Ionicons
-                name={isRecording ? 'stop-circle-outline' : 'mic'}
-                size={isRecording ? 30 : 20}
-                color="#000"
-                style={
-                  !isRecording
-                    ? {
-                        marginBottom: 2,
-                      }
-                    : undefined
-                }
-              />
-            </TouchableOpacity>
-          </View>
-        </View>
+            if (!value.trim()) {
+              setSearchType(null);
+              setSelectedFlight(null);
+            }
+          }}
+          placeholder={"Say or type: 'Flight to Dubai next Tuesday'"}
+          onProcessingStateChange={setIsVoiceProcessing}
+          showClearButton
+          multiline
+          numberOfLines={2}
+        />
 
         {/* ---------------------------------- */}
         {/* Intent Processing */}
         {/* ---------------------------------- */}
 
-        {isTranscribing && (
+        {isIntentProcessing && (
           <View style={screenStyles.processingContainer}>
             <ActivityIndicator size="small" color="#1E293B" />
 
@@ -981,23 +839,29 @@ export function TravelScreen({ onBook }: TravelScreenProps) {
         {/* Search CTA */}
         {/* ---------------------------------- */}
 
-        {searchType === 'flight' && (
-          <PrimaryButton
-            text={isDuffelLoading ? '✦ Searching Flights...' : '✦ Find Flights'}
-            onPress={() => openDuffelCheckout('flight')}
-            fullWidth
-            disabled={isDuffelLoading}
-          />
-        )}
+        {!isVoiceProcessing &&
+          !isIntentProcessing &&
+          searchType === 'flight' && (
+            <PrimaryButton
+              text={
+                isDuffelLoading ? '✦ Searching Flights...' : '✦ Find Flights'
+              }
+              onPress={() => openDuffelCheckout('flight')}
+              fullWidth
+              disabled={isDuffelLoading}
+            />
+          )}
 
-        {searchType === 'hotel' && (
-          <PrimaryButton
-            text={isDuffelLoading ? '✦ Searching Hotels...' : '✦ Find Hotels'}
-            onPress={() => openDuffelCheckout('hotel')}
-            fullWidth
-            disabled={isDuffelLoading}
-          />
-        )}
+        {!isVoiceProcessing &&
+          !isIntentProcessing &&
+          searchType === 'hotel' && (
+            <PrimaryButton
+              text={isDuffelLoading ? '✦ Searching Hotels...' : '✦ Find Hotels'}
+              onPress={() => openDuffelCheckout('hotel')}
+              fullWidth
+              disabled={isDuffelLoading}
+            />
+          )}
 
         {/* ---------------------------------- */}
         {/* My Bookings */}
@@ -1399,71 +1263,6 @@ const screenStyles = StyleSheet.create({
 
   screenScrollContent: {
     paddingBottom: 24,
-  },
-
-  searchBoxLayout: {
-    flexDirection: 'column',
-    alignItems: 'stretch',
-    justifyContent: 'center',
-    paddingVertical: 8,
-  },
-
-  recordingSearchBox: {
-    minHeight: 130,
-    paddingVertical: 10,
-  },
-
-  inputRow: {
-    width: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    minHeight: 44,
-  },
-
-  recordingInput: {
-    flex: 1,
-    minWidth: 0,
-    minHeight: 60,
-  },
-
-  closeButton: {
-    width: 36,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 2,
-    flexShrink: 0,
-  },
-
-  bottomRow: {
-    width: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    minHeight: 56,
-    marginTop: 4,
-  },
-
-  waveformWrapper: {
-    flex: 1,
-    height: 56,
-    justifyContent: 'center',
-    alignItems: 'stretch',
-    overflow: 'hidden',
-    minWidth: 0,
-  },
-
-  emptyWaveformSpace: {
-    flex: 1,
-    minWidth: 0,
-  },
-
-  micButton: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 8,
-    flexShrink: 0,
   },
 
   /**

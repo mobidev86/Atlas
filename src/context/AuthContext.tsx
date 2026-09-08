@@ -9,7 +9,6 @@ import React, {
 import { AuthService } from '../services/authService';
 import { SubscriptionService } from '../services/subscriptionService';
 import { supabase } from '../services/supabase';
-import { ProfileService } from '../services/profileService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   DiningPreferences,
@@ -19,6 +18,7 @@ import {
 import { ONBOARDING_KEY } from '../config/constants';
 import { Subscription } from '../types/Subscription';
 import { RealtimeChannel } from '@supabase/supabase-js';
+import { ProfileService } from '../services/profileService';
 
 export type AuthRouteState =
   | 'loading'
@@ -71,25 +71,124 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
+
   const [isLoading, setIsLoading] = useState(false);
+
+  /**
+   * This only represents the initial auth/session restoration.
+   *
+   * IMPORTANT:
+   * We no longer keep this true while waiting for subscription.
+   */
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+
   const [isSubscriptionLoading, setIsSubscriptionLoading] = useState(false);
   const [subscriptionChecked, setSubscriptionChecked] = useState(false);
+
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
+
   const profileChannelRef = useRef<RealtimeChannel | null>(null);
 
+  /**
+   * -----------------------------------------
+   * Initial Auth Initialization
+   * -----------------------------------------
+   *
+   * IMPORTANT:
+   *
+   * Session restoration and subscription
+   * loading are now separate.
+   *
+   * Once we know the user is logged in,
+   * we allow the app to proceed immediately.
+   *
+   * Subscription is refreshed in the
+   * background.
+   */
   useEffect(() => {
+    let mounted = true;
+
     const initAuth = async () => {
       try {
         const onboardingFlag = await AsyncStorage.getItem(ONBOARDING_KEY);
+
+        if (!mounted) {
+          return;
+        }
+
         setHasCompletedOnboarding(onboardingFlag === 'true');
+
+        /**
+         * Restore the Supabase session.
+         */
         const result = await AuthService.restoreSession();
+
+        if (!mounted) {
+          return;
+        }
+
         setUser(result.user);
+
+        /**
+         * ---------------------------------------
+         * Authenticated user
+         * ---------------------------------------
+         *
+         * IMPORTANT:
+         *
+         * Do NOT mark subscription as checked here.
+         *
+         * subscriptionChecked = false means:
+         *
+         * "We have a user, but subscription
+         * information is still being resolved."
+         *
+         * authRouteState intentionally treats this
+         * state as HOME so the subscription request
+         * cannot block or flash the SubscriptionScreen.
+         */
         if (result.user) {
-          await refreshSubscription(result.user);
+          setSubscriptionChecked(false);
+
+          /**
+           * Background subscription refresh.
+           *
+           * We intentionally do NOT await this.
+           *
+           * The user can enter Home immediately.
+           */
+          refreshSubscription(result.user).catch(error => {
+            console.error('Background subscription refresh failed:', error);
+          });
+        } else {
+          /**
+           * No logged-in user.
+           *
+           * There is no subscription to resolve.
+           */
+          setSubscription(null);
+          setSubscriptionChecked(true);
+        }
+      } catch (error) {
+        console.error('initAuth failed:', error);
+
+        if (mounted) {
+          setUser(null);
+          setSubscription(null);
+          setSubscriptionChecked(true);
         }
       } finally {
-        setIsInitialLoading(false);
+        if (mounted) {
+          /**
+           * Session restoration is complete.
+           *
+           * IMPORTANT:
+           *
+           * This only controls the initial loading screen.
+           * It does NOT mean subscription checking is complete.
+           */
+          setIsInitialLoading(false);
+        }
       }
     };
 
@@ -97,44 +196,84 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const { data: listener } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
-        // Skip the event Supabase fires immediately on subscribe — initAuth()
-        // already handles the cold-start session restore. Without this guard,
-        // both paths run concurrently and briefly reset subscriptionChecked,
-        // causing a second loading flash right after the first.
+        /**
+         * Supabase fires INITIAL_SESSION immediately
+         * when the listener is registered.
+         *
+         * initAuth() already handles that.
+         */
         if (_event === 'INITIAL_SESSION') {
           return;
         }
+
+        /**
+         * ---------------------------------------
+         * Logged out
+         * ---------------------------------------
+         */
         if (!session) {
           setUser(null);
           setSubscription(null);
           setSubscriptionChecked(false);
+          setIsSubscriptionLoading(false);
+
           return;
         }
 
-        // Reset before checking — this user's subscription status
-        // hasn't been confirmed yet, so authRouteState should stay
-        // in 'loading' until refreshSubscription completes below.
+        /**
+         * ---------------------------------------
+         * Logged in / session changed
+         * ---------------------------------------
+         */
         setSubscriptionChecked(false);
 
-        const profile = await ProfileService.getCurrentProfile();
-        setUser(profile.user);
+        try {
+          /**
+           * Fetch profile.
+           */
+          const profile = await ProfileService.getCurrentProfile();
 
-        if (profile.user) {
-          await refreshSubscription(profile.user);
+          if (!mounted) {
+            return;
+          }
+
+          setUser(profile.user);
+
+          if (profile.user) {
+            /**
+             * For login/session changes we still
+             * fetch the subscription.
+             *
+             * However, we don't need to block the
+             * auth session restoration itself.
+             */
+            await refreshSubscription(profile.user);
+          } else {
+            setSubscriptionChecked(true);
+          }
+        } catch (error) {
+          console.error('onAuthStateChange profile handling failed:', error);
+
+          if (mounted) {
+            setSubscriptionChecked(true);
+          }
         }
       },
     );
 
     return () => {
+      mounted = false;
       listener.subscription.unsubscribe();
     };
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Realtime subscription for profile flags (auto_book_enabled,
-  // zero_retention_enabled) — picks up changes made from the Supabase
-  // dashboard (or anywhere else) and merges them into `user` live,
-  // with no user interaction required in the app.
+  /**
+   * -----------------------------------------
+   * Profile Realtime Subscription
+   * -----------------------------------------
+   */
   useEffect(() => {
     if (profileChannelRef.current) {
       supabase.removeChannel(profileChannelRef.current);
@@ -156,9 +295,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           filter: `id=eq.${user.id}`,
         },
         async payload => {
+          /**
+           * User was banned from dashboard.
+           */
           if (payload.new.is_banned) {
-            // User was banned from the dashboard — force logout immediately,
-            // no user interaction needed.
             await logout();
             return;
           }
@@ -184,14 +324,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         profileChannelRef.current = null;
       }
     };
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
+  /**
+   * -----------------------------------------
+   * Subscription Refresh
+   * -----------------------------------------
+   */
   const refreshSubscription = async (resolvedUser?: UserProfile | null) => {
-    // Accept an explicit user argument to avoid stale closure issues
-    // (e.g. when called immediately after setUser inside login/register,
-    // or from the onAuthStateChange listener which closes over stale state)
     const currentUser = resolvedUser !== undefined ? resolvedUser : user;
+
     if (!currentUser) {
       setSubscription(null);
       setSubscriptionChecked(true);
@@ -200,11 +344,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     try {
       setIsSubscriptionLoading(true);
-      const { subscription } =
-        await SubscriptionService.getCurrentSubscription();
+
+      const { subscription } = await SubscriptionService.getCurrentSubscription(
+        currentUser.id,
+      );
+
       setSubscription(subscription);
     } catch (err) {
       console.error('refreshSubscription failed:', err);
+
       setSubscription(null);
     } finally {
       setIsSubscriptionLoading(false);
@@ -212,6 +360,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  /**
+   * -----------------------------------------
+   * Login
+   * -----------------------------------------
+   */
   const login = async (email: string, password: string) => {
     try {
       setIsLoading(true);
@@ -225,10 +378,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         };
       }
 
-      // Don't fetch profile/subscription here — signing in triggers
-      // Supabase's onAuthStateChange listener above, which handles
-      // setUser + refreshSubscription. Doing it here too would create
-      // two competing writers to the same state (a race condition).
+      /**
+       * Supabase onAuthStateChange handles:
+       *
+       * user
+       * profile
+       * subscription
+       */
       return {
         success: true,
         error: null,
@@ -243,47 +399,90 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  /**
+   * -----------------------------------------
+   * Register
+   * -----------------------------------------
+   */
   const register = async (email: string, password: string, name?: string) => {
-    setIsLoading(true);
-    setSubscriptionChecked(false);
-    const result = await AuthService.register(email, password, name);
-    setUser(result.user);
-    if (result.user) {
-      // Pass the resolved user directly to avoid stale closure in refreshSubscription
-      await SubscriptionService.createStripeCustomer();
-      await refreshSubscription(result.user);
-    } else {
+    try {
+      setIsLoading(true);
+      setSubscriptionChecked(false);
+
+      const result = await AuthService.register(email, password, name);
+
+      setUser(result.user);
+
+      if (result.user) {
+        await SubscriptionService.createStripeCustomer();
+
+        await refreshSubscription(result.user);
+      } else {
+        setSubscriptionChecked(true);
+      }
+
+      return {
+        success: !!result.user,
+        error: result.error,
+      };
+    } catch (error: any) {
       setSubscriptionChecked(true);
+
+      return {
+        success: false,
+        error: error.message ?? 'Registration failed.',
+      };
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
-    return {
-      success: !!result.user,
-      error: result.error,
-    };
   };
 
+  /**
+   * -----------------------------------------
+   * Logout
+   * -----------------------------------------
+   */
   const logout = async () => {
     await AuthService.logout();
+
     setUser(null);
     setSubscription(null);
     setSubscriptionChecked(false);
   };
 
+  /**
+   * -----------------------------------------
+   * Refresh Profile
+   * -----------------------------------------
+   */
   const refreshProfile = async () => {
     const result = await ProfileService.getCurrentProfile();
+
     if (result.user) {
       setUser(result.user);
     }
   };
 
+  /**
+   * -----------------------------------------
+   * Onboarding
+   * -----------------------------------------
+   */
   const completeOnboarding = async () => {
     await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
+
     setHasCompletedOnboarding(true);
   };
 
+  /**
+   * -----------------------------------------
+   * Subscribe
+   * -----------------------------------------
+   */
   const subscribe = async () => {
     const { success, customerId, error } =
       await SubscriptionService.subscribeUser();
+
     return {
       success,
       customerId,
@@ -291,6 +490,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   };
 
+  /**
+   * -----------------------------------------
+   * Travel Preferences
+   * -----------------------------------------
+   */
   const updateTravelPreferences = async (prefs: Partial<TravelPreferences>) => {
     if (!user) {
       return;
@@ -308,6 +512,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  /**
+   * -----------------------------------------
+   * Dining Preferences
+   * -----------------------------------------
+   */
   const updateDiningPreferences = async (prefs: Partial<DiningPreferences>) => {
     if (!user) {
       return;
@@ -325,6 +534,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  /**
+   * -----------------------------------------
+   * Auto Book
+   * -----------------------------------------
+   */
   const toggleAutoBook = async () => {
     if (!user) {
       return;
@@ -339,6 +553,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  /**
+   * -----------------------------------------
+   * Zero Retention
+   * -----------------------------------------
+   */
   const toggleZeroRetention = async () => {
     if (!user) {
       return;
@@ -354,13 +573,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const isAuthenticated = !!user;
+
   const isSubscribed =
     subscription?.status === 'active' || subscription?.status === 'trialing';
 
+  /**
+   * -----------------------------------------
+   * Auth Route State
+   * -----------------------------------------
+   *
+   * IMPORTANT:
+   *
+   * For an authenticated user, we allow Home
+   * immediately while the subscription request
+   * is running.
+   *
+   * Once the subscription response arrives,
+   * this state automatically becomes either:
+   *
+   * home
+   *
+   * or
+   *
+   * subscription
+   */
   const authRouteState: AuthRouteState = useMemo(() => {
-    if (!hasCompletedOnboarding) return 'onboarding';
-    if (!user) return 'auth';
-    if (!subscriptionChecked) return 'loading';
+    if (!hasCompletedOnboarding) {
+      return 'onboarding';
+    }
+
+    if (!user) {
+      return 'auth';
+    }
+
+    /**
+     * Subscription is still being resolved.
+     *
+     * IMPORTANT:
+     *
+     * Always allow authenticated users into Home
+     * while this request is running.
+     */
+    if (!subscriptionChecked) {
+      return 'home';
+    }
+
     return isSubscribed ? 'home' : 'subscription';
   }, [hasCompletedOnboarding, user, subscriptionChecked, isSubscribed]);
 
@@ -397,8 +654,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
+
   if (!context) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
+
   return context;
 };
