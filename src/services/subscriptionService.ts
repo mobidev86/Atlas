@@ -1,13 +1,32 @@
 import { supabase } from './supabase';
 import { AuthService } from './authService';
+
 import { Subscription } from '../types/Subscription';
 import { mapSubscriptionRowToSubscription } from '../mappers/subscriptionMapper';
+
 import { Platform } from 'react-native';
+
 import { extractEdgeFunctionErrorMessage } from '../utils/edgeFunctionError';
 
 export class SubscriptionService {
   /**
-   * Get current user subscription
+   * -----------------------------------------
+   * Get Current Subscription
+   * -----------------------------------------
+   *
+   * IMPORTANT:
+   *
+   * When userId is supplied, this method performs
+   * ONLY the subscriptions query.
+   *
+   * It does NOT:
+   *
+   * - restore the session
+   * - call getSession()
+   * - call getUser()
+   * - fetch the profile
+   *
+   * This is critical during application startup.
    */
   static async getCurrentSubscription(userId?: string): Promise<{
     subscription: Subscription | null;
@@ -16,10 +35,25 @@ export class SubscriptionService {
     try {
       let resolvedUserId = userId;
 
+      /**
+       * Compatibility fallback.
+       *
+       * Existing callers that don't provide a userId
+       * can still use this method.
+       *
+       * AuthContext ALWAYS provides userId.
+       */
       if (!resolvedUserId) {
-        const { user } = await AuthService.getCurrentUser();
+        const { user, error: authError } = await AuthService.getCurrentUser();
 
-        if (!user) {
+        if (authError) {
+          return {
+            subscription: null,
+            error: authError,
+          };
+        }
+
+        if (!user?.id) {
           return {
             subscription: null,
             error: 'User not authenticated.',
@@ -29,6 +63,11 @@ export class SubscriptionService {
         resolvedUserId = user.id;
       }
 
+      /**
+       * ---------------------------------------
+       * Subscription query
+       * ---------------------------------------
+       */
       const { data, error } = await supabase
         .from('subscriptions')
         .select('*')
@@ -49,21 +88,24 @@ export class SubscriptionService {
 
       return {
         subscription: data ? mapSubscriptionRowToSubscription(data) : null,
+
         error: null,
       };
-    } catch (err: any) {
+    } catch (error: any) {
       return {
         subscription: null,
-        error: err.message || 'Unable to fetch subscription.',
+        error: error?.message || 'Unable to fetch subscription.',
       };
     }
   }
 
   /**
-   * Check if user has active subscription
+   * -----------------------------------------
+   * Check Subscription
+   * -----------------------------------------
    */
-  static async checkSubscription(): Promise<boolean> {
-    const { subscription } = await this.getCurrentSubscription();
+  static async checkSubscription(userId?: string): Promise<boolean> {
+    const { subscription } = await this.getCurrentSubscription(userId);
 
     if (!subscription) {
       return false;
@@ -75,10 +117,9 @@ export class SubscriptionService {
   }
 
   /**
-   * Create Stripe customer
-   *
-   * Calls:
-   * supabase/functions/create-stripe-customer
+   * -----------------------------------------
+   * Create Stripe Customer
+   * -----------------------------------------
    */
   static async createStripeCustomer(): Promise<{
     success: boolean;
@@ -103,26 +144,22 @@ export class SubscriptionService {
 
       return {
         success: true,
-        customerId: data.customerId,
+        customerId: data?.customerId ?? null,
         error: null,
       };
-    } catch (err: any) {
+    } catch (error: any) {
       return {
         success: false,
         customerId: null,
-        error: err.message || 'Unable to create Stripe customer',
+        error: error?.message || 'Unable to create Stripe customer.',
       };
     }
   }
 
   /**
-   * Start subscription flow
-   *
-   * Android:
-   * Stripe Billing
-   *
-   * iOS:
-   * Apple IAP (later)
+   * -----------------------------------------
+   * Start Subscription Flow
+   * -----------------------------------------
    */
   static async subscribeUser(
     planTier: 'executive' | 'standard' = 'executive',
@@ -132,7 +169,19 @@ export class SubscriptionService {
     error: string | null;
   }> {
     try {
-      const { user } = await AuthService.getCurrentUser();
+      /**
+       * This call is kept because subscription
+       * creation requires an authenticated user.
+       */
+      const { user, error: authError } = await AuthService.getCurrentUser();
+
+      if (authError) {
+        return {
+          success: false,
+          customerId: null,
+          error: authError,
+        };
+      }
 
       if (!user) {
         return {
@@ -143,19 +192,15 @@ export class SubscriptionService {
       }
 
       /**
+       * Keep the existing argument available for
+       * future subscription-tier handling.
+       */
+      void planTier;
+
+      /**
        * Step 1:
        * Create Stripe customer
-       *
-       * Step 2:
-       * Create subscription
-       *
-       * Step 3:
-       * Open Payment Sheet
-       *
-       * Step 4:
-       * Webhook updates subscriptions table
        */
-
       const customerResult = await this.createStripeCustomer();
 
       if (!customerResult.success) {
@@ -166,24 +211,33 @@ export class SubscriptionService {
         };
       }
 
+      /**
+       * The existing application currently only
+       * creates the customer here.
+       *
+       * The remaining subscription/payment flow
+       * can continue through the existing Stripe
+       * implementation.
+       */
       return {
         success: true,
-
         customerId: customerResult.customerId,
-
         error: null,
       };
-    } catch (err: any) {
+    } catch (error: any) {
       return {
         success: false,
-
         customerId: null,
-
-        error: err.message || 'Subscription failed.',
+        error: error?.message || 'Subscription failed.',
       };
     }
   }
 
+  /**
+   * -----------------------------------------
+   * Create Trial Setup
+   * -----------------------------------------
+   */
   static async createTrialSetup(tier: 'standard' | 'executive'): Promise<{
     setupIntentClientSecret: string | null;
     ephemeralKeySecret: string | null;
@@ -194,7 +248,10 @@ export class SubscriptionService {
       const { data, error } = await supabase.functions.invoke(
         'create-trial-setup',
         {
-          body: { tier, platform: Platform.OS },
+          body: {
+            tier,
+            platform: Platform.OS,
+          },
         },
       );
 
@@ -211,21 +268,29 @@ export class SubscriptionService {
       }
 
       return {
-        setupIntentClientSecret: data.setupIntentClientSecret,
-        ephemeralKeySecret: data.ephemeralKeySecret,
-        customerId: data.customerId,
+        setupIntentClientSecret: data?.setupIntentClientSecret ?? null,
+
+        ephemeralKeySecret: data?.ephemeralKeySecret ?? null,
+
+        customerId: data?.customerId ?? null,
+
         error: null,
       };
-    } catch (err: any) {
+    } catch (error: any) {
       return {
         setupIntentClientSecret: null,
         ephemeralKeySecret: null,
         customerId: null,
-        error: err.message ?? 'Unable to start subscription setup.',
+        error: error?.message || 'Unable to start subscription setup.',
       };
     }
   }
 
+  /**
+   * -----------------------------------------
+   * Confirm Trial Subscription
+   * -----------------------------------------
+   */
   static async confirmTrialSubscription(setupIntentId: string): Promise<{
     success: boolean;
     error: string | null;
@@ -237,7 +302,9 @@ export class SubscriptionService {
       const { data, error } = await supabase.functions.invoke(
         'confirm-trial-subscription',
         {
-          body: { setupIntentId },
+          body: {
+            setupIntentId,
+          },
         },
       );
 
@@ -254,29 +321,53 @@ export class SubscriptionService {
       return {
         success: true,
         error: null,
-        status: data.status,
-        paymentIntentStatus: data.paymentIntentStatus,
-        paymentIntentClientSecret: data.paymentIntentClientSecret,
+        status: data?.status,
+        paymentIntentStatus: data?.paymentIntentStatus ?? null,
+        paymentIntentClientSecret: data?.paymentIntentClientSecret ?? null,
       };
-    } catch (err: any) {
+    } catch (error: any) {
       return {
         success: false,
-        error: err.message ?? 'Unable to confirm subscription.',
+        error: error?.message || 'Unable to confirm subscription.',
       };
     }
   }
 
-  // SubscriptionService
+  /**
+   * -----------------------------------------
+   * Trial Eligibility
+   * -----------------------------------------
+   */
   static async getTrialEligibility(): Promise<{
     isEligible: boolean;
     error: string | null;
   }> {
     try {
+      /**
+       * This method genuinely needs the current
+       * authenticated Supabase user because it
+       * doesn't receive a userId.
+       *
+       * Unlike the subscription startup flow,
+       * this is an explicit eligibility check.
+       */
       const {
         data: { user },
+        error: authError,
       } = await supabase.auth.getUser();
+
+      if (authError) {
+        return {
+          isEligible: false,
+          error: authError.message,
+        };
+      }
+
       if (!user) {
-        return { isEligible: false, error: 'Not authenticated.' };
+        return {
+          isEligible: false,
+          error: 'Not authenticated.',
+        };
       }
 
       const { data, error } = await supabase
@@ -286,25 +377,29 @@ export class SubscriptionService {
         .single();
 
       if (error) {
-        return { isEligible: false, error: error.message };
+        return {
+          isEligible: false,
+          error: error.message,
+        };
       }
 
-      return { isEligible: !data.has_used_trial, error: null };
-    } catch (err: any) {
+      return {
+        isEligible: !data.has_used_trial,
+        error: null,
+      };
+    } catch (error: any) {
       return {
         isEligible: false,
-        error: err.message ?? 'Unable to check trial eligibility.',
+        error: error?.message || 'Unable to check trial eligibility.',
       };
     }
   }
 
   /**
-   * Cancel subscription
-   *
-   * TODO:
-   * Call cancel-subscription Edge Function
+   * -----------------------------------------
+   * Cancel Subscription
+   * -----------------------------------------
    */
-  // SubscriptionService
   static async cancelSubscription(): Promise<{
     success: boolean;
     cancelAtPeriodEnd: boolean;
@@ -330,20 +425,25 @@ export class SubscriptionService {
 
       return {
         success: true,
-        cancelAtPeriodEnd: data.cancelAtPeriodEnd,
-        currentPeriodEnd: data.currentPeriodEnd,
+        cancelAtPeriodEnd: data?.cancelAtPeriodEnd ?? false,
+        currentPeriodEnd: data?.currentPeriodEnd ?? null,
         error: null,
       };
-    } catch (err: any) {
+    } catch (error: any) {
       return {
         success: false,
         cancelAtPeriodEnd: false,
         currentPeriodEnd: null,
-        error: err.message ?? 'Unable to cancel subscription.',
+        error: error?.message || 'Unable to cancel subscription.',
       };
     }
   }
 
+  /**
+   * -----------------------------------------
+   * Sync Subscription Status
+   * -----------------------------------------
+   */
   static async syncSubscriptionStatus(): Promise<{
     synced: boolean;
     changed: boolean;
@@ -368,17 +468,20 @@ export class SubscriptionService {
       }
 
       return {
-        synced: data.synced,
-        changed: data.changed ?? false,
-        status: data.status ?? null,
+        synced: data?.synced ?? false,
+
+        changed: data?.changed ?? false,
+
+        status: data?.status ?? null,
+
         error: null,
       };
-    } catch (err: any) {
+    } catch (error: any) {
       return {
         synced: false,
         changed: false,
         status: null,
-        error: err.message,
+        error: error?.message || 'Unable to sync subscription.',
       };
     }
   }

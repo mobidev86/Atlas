@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { View, ScrollView, Pressable, Text, Alert } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import styles, { colors } from '../styles/styles';
@@ -27,15 +27,8 @@ export function MainLayout({
   subtitle,
   onBack,
 }: MainLayoutProps) {
-  const { user, logout, refreshProfile } = useAuth();
+  const { user, logout } = useAuth();
   const navigation = useNavigation<MainLayoutNavigationProp>();
-
-  // Refresh the latest profile data whenever MainLayout mounts.
-  // This ensures the Home header gets the latest user information
-  // after registration/profile updates.
-  useEffect(() => {
-    refreshProfile();
-  }, [refreshProfile]);
 
   const handleLogout = () => {
     Alert.alert('Sign out', 'Are you sure you want to sign out of Atlas?', [

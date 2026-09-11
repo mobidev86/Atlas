@@ -10,58 +10,10 @@ import {
 
 export class AuthService {
   /**
+   * -----------------------------------------
    * Login
+   * -----------------------------------------
    */
-  // static async login(
-  //   email: string,
-  //   password: string,
-  // ): Promise<{
-  //   user: UserProfile | null;
-  //   error: string | null;
-  // }> {
-  //   try {
-  //     if (!email.trim()) {
-  //       return {
-  //         user: null,
-  //         error: 'Email is required.',
-  //       };
-  //     }
-
-  //     if (!password.trim()) {
-  //       return {
-  //         user: null,
-  //         error: 'Password is required.',
-  //       };
-  //     }
-
-  //     const { data, error } = await supabase.auth.signInWithPassword({
-  //       email: email.trim().toLowerCase(),
-  //       password,
-  //     });
-
-  //     if (error) {
-  //       return {
-  //         user: null,
-  //         error: error.message,
-  //       };
-  //     }
-
-  //     if (!data.user) {
-  //       return {
-  //         user: null,
-  //         error: 'Unable to login.',
-  //       };
-  //     }
-
-  //     return await ProfileService.getCurrentProfile();
-  //   } catch (error: any) {
-  //     return {
-  //       user: null,
-  //       error: error?.message ?? 'Login failed.',
-  //     };
-  //   }
-  // }
-
   static async login(
     email: string,
     password: string,
@@ -70,7 +22,9 @@ export class AuthService {
     error: string | null;
   }> {
     try {
-      if (!email.trim()) {
+      const normalizedEmail = email.trim().toLowerCase();
+
+      if (!normalizedEmail) {
         return {
           user: null,
           error: 'Email is required.',
@@ -85,7 +39,7 @@ export class AuthService {
       }
 
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
+        email: normalizedEmail,
         password,
       });
 
@@ -103,104 +57,37 @@ export class AuthService {
         };
       }
 
-      // Login is complete at this point.
-      // Do NOT wait for the profile request.
+      /**
+       * Resolve the actual application profile.
+       *
+       * Do NOT cast Supabase AuthUser to UserProfile.
+       */
+      const profile = await ProfileService.getCurrentProfile();
+
+      if (!profile.user) {
+        return {
+          user: null,
+          error: profile.error || 'Unable to load your profile.',
+        };
+      }
+
       return {
-        user: data.user as unknown as UserProfile,
+        user: profile.user,
         error: null,
       };
     } catch (error: any) {
       return {
         user: null,
-        error: error?.message ?? 'Login failed.',
+        error: error?.message || 'Login failed.',
       };
     }
   }
 
   /**
+   * -----------------------------------------
    * Register
+   * -----------------------------------------
    */
-  // static async register(
-  //   email: string,
-  //   password: string,
-  //   fullName?: string,
-  // ): Promise<{
-  //   user: UserProfile | null;
-  //   error: string | null;
-  // }> {
-  //   try {
-  //     if (!email.trim()) {
-  //       return {
-  //         user: null,
-  //         error: 'Email is required.',
-  //       };
-  //     }
-
-  //     if (password.length < 6) {
-  //       return {
-  //         user: null,
-  //         error: 'Password must be at least 6 characters.',
-  //       };
-  //     }
-
-  //     const { data, error } = await supabase.auth.signUp({
-  //       email: email.trim().toLowerCase(),
-  //       password,
-  //       options: {
-  //         data: {
-  //           full_name: fullName ?? '',
-  //         },
-  //       },
-  //     });
-
-  //     if (error) {
-  //       return {
-  //         user: null,
-  //         error: error.message,
-  //       };
-  //     }
-
-  //     if (!data.user) {
-  //       return {
-  //         user: null,
-  //         error: 'Unable to register user.',
-  //       };
-  //     }
-
-  //     /**
-  //      * Email verification enabled
-  //      *
-  //      * User exists
-  //      * Session does not.
-  //      */
-  //     if (!data.session) {
-  //       return {
-  //         user: null,
-  //         error:
-  //           'Verification email sent. Please verify your email before logging in.',
-  //       };
-  //     }
-
-  //     const profile = await ProfileService.createProfile({
-  //       id: data.user.id,
-  //       email: data.user.email!,
-  //       fullName,
-  //       autoBookEnabled: false,
-  //       zeroRetentionEnabled: true,
-  //       travelPreferences: DEFAULT_TRAVEL_PREFERENCES,
-  //       diningPreferences: DEFAULT_DINING_PREFERENCES,
-  //       nylasAccountStatus: 'disconnected',
-  //     });
-
-  //     return profile;
-  //   } catch (error: any) {
-  //     return {
-  //       user: null,
-  //       error: error?.message ?? 'Registration failed.',
-  //     };
-  //   }
-  // }
-
   static async register(
     email: string,
     password: string,
@@ -210,7 +97,9 @@ export class AuthService {
     error: string | null;
   }> {
     try {
-      if (!email.trim()) {
+      const normalizedEmail = email.trim().toLowerCase();
+
+      if (!normalizedEmail) {
         return {
           user: null,
           error: 'Email is required.',
@@ -225,7 +114,7 @@ export class AuthService {
       }
 
       const { data, error } = await supabase.auth.signUp({
-        email: email.trim().toLowerCase(),
+        email: normalizedEmail,
         password,
         options: {
           data: {
@@ -249,10 +138,9 @@ export class AuthService {
       }
 
       /**
-       * Email verification enabled
+       * Email verification enabled.
        *
-       * User exists
-       * Session does not.
+       * User exists but there is no session yet.
        */
       if (!data.session) {
         return {
@@ -263,40 +151,65 @@ export class AuthService {
       }
 
       /**
-       * Create profile in background.
+       * ---------------------------------------
+       * Create application profile
+       * ---------------------------------------
        *
-       * We intentionally do NOT await this.
+       * We intentionally create it before
+       * returning the UserProfile.
+       *
+       * This prevents AuthContext from temporarily
+       * treating the raw Supabase auth user as an
+       * application UserProfile.
        */
-      ProfileService.createProfile({
+      const profile = await ProfileService.createProfile({
         id: data.user.id,
         email: data.user.email!,
         fullName,
+
         autoBookEnabled: false,
         zeroRetentionEnabled: true,
+
         travelPreferences: DEFAULT_TRAVEL_PREFERENCES,
+
         diningPreferences: DEFAULT_DINING_PREFERENCES,
+
         nylasAccountStatus: 'disconnected',
-      }).catch(profileError => {
-        console.error('BACKGROUND PROFILE CREATION ERROR:', profileError);
       });
 
-      /**
-       * Return immediately after Supabase registration.
-       */
+      if (!profile.user) {
+        return {
+          user: null,
+          error:
+            profile.error ||
+            'Account created, but unable to create your profile.',
+        };
+      }
+
       return {
-        user: data.user as unknown as UserProfile,
+        user: profile.user,
         error: null,
       };
     } catch (error: any) {
       return {
         user: null,
-        error: error?.message ?? 'Registration failed.',
+        error: error?.message || 'Registration failed.',
       };
     }
   }
 
   /**
-   * Restore session
+   * -----------------------------------------
+   * Restore Session
+   * -----------------------------------------
+   *
+   * This is the ONLY place where we combine:
+   *
+   * Supabase session restoration
+   * +
+   * application profile loading
+   *
+   * during initial startup.
    */
   static async restoreSession(): Promise<{
     user: UserProfile | null;
@@ -305,26 +218,63 @@ export class AuthService {
     try {
       const {
         data: { session },
+        error,
       } = await supabase.auth.getSession();
 
-      if (!session) {
+      if (error) {
+        return {
+          user: null,
+          error: error.message,
+        };
+      }
+
+      if (!session?.user) {
         return {
           user: null,
           error: null,
         };
       }
 
-      return await ProfileService.getCurrentProfile();
+      /**
+       * Session exists.
+       *
+       * Now load the application profile.
+       */
+      const profile = await ProfileService.getCurrentProfile();
+
+      if (!profile.user) {
+        return {
+          user: null,
+          error: profile.error || 'Unable to load your profile.',
+        };
+      }
+
+      return {
+        user: profile.user,
+        error: null,
+      };
     } catch (error: any) {
       return {
         user: null,
-        error: error?.message ?? 'Unable to restore session.',
+        error: error?.message || 'Unable to restore session.',
       };
     }
   }
 
   /**
-   * Current logged in user
+   * -----------------------------------------
+   * Current Logged In User
+   * -----------------------------------------
+   *
+   * Kept for compatibility with existing code.
+   *
+   * IMPORTANT:
+   *
+   * This returns the application's UserProfile,
+   * not merely the Supabase Auth user.
+   *
+   * SubscriptionService should NOT use this
+   * when a userId is already known.
    */
   static async getCurrentUser(): Promise<{
     user: UserProfile | null;
@@ -334,7 +284,9 @@ export class AuthService {
   }
 
   /**
+   * -----------------------------------------
    * Logout
+   * -----------------------------------------
    */
   static async logout(): Promise<{
     success: boolean;
@@ -357,21 +309,32 @@ export class AuthService {
     } catch (error: any) {
       return {
         success: false,
-        error: error?.message ?? 'Unable to logout.',
+        error: error?.message || 'Unable to logout.',
       };
     }
   }
 
   /**
-   * Send password reset email
+   * -----------------------------------------
+   * Send Password Reset Email
+   * -----------------------------------------
    */
   static async resetPassword(email: string): Promise<{
     success: boolean;
     error: string | null;
   }> {
     try {
+      const normalizedEmail = email.trim().toLowerCase();
+
+      if (!normalizedEmail) {
+        return {
+          success: false,
+          error: 'Email is required.',
+        };
+      }
+
       const { error } = await supabase.auth.resetPasswordForEmail(
-        email.trim().toLowerCase(),
+        normalizedEmail,
       );
 
       if (error) {
@@ -388,22 +351,33 @@ export class AuthService {
     } catch (error: any) {
       return {
         success: false,
-        error: error?.message ?? 'Unable to send reset password email.',
+        error: error?.message || 'Unable to send password reset email.',
       };
     }
   }
 
   /**
-   * Resend verification email
+   * -----------------------------------------
+   * Resend Verification Email
+   * -----------------------------------------
    */
   static async resendVerificationEmail(email: string): Promise<{
     success: boolean;
     error: string | null;
   }> {
     try {
+      const normalizedEmail = email.trim().toLowerCase();
+
+      if (!normalizedEmail) {
+        return {
+          success: false,
+          error: 'Email is required.',
+        };
+      }
+
       const { error } = await supabase.auth.resend({
         type: 'signup',
-        email: email.trim().toLowerCase(),
+        email: normalizedEmail,
       });
 
       if (error) {
@@ -420,7 +394,7 @@ export class AuthService {
     } catch (error: any) {
       return {
         success: false,
-        error: error?.message ?? 'Unable to resend verification email.',
+        error: error?.message || 'Unable to resend verification email.',
       };
     }
   }

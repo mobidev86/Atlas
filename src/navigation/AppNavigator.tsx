@@ -38,9 +38,10 @@ import { SubscriptionService } from '../services/subscriptionService';
 import { useStripe } from '@stripe/stripe-react-native';
 import LoadingOverlay from '../components/LoadingOverlay';
 
-const Stack = createNativeStackNavigator<RootStackParamList>();
+// Shared navigation ref
+import { navigationRef } from './navigationRef';
 
-const navigationRef = createNavigationContainerRef<RootStackParamList>();
+const Stack = createNativeStackNavigator<RootStackParamList>();
 
 type SplashScreenProps = NativeStackScreenProps<RootStackParamList, 'Splash'>;
 
@@ -305,14 +306,17 @@ function OnboardScreenContainer({ navigation }: OnboardScreenWrapperProps) {
  * Reply
  * -----------------------------------------
  */
-function ReplyScreenContainer({ navigation }: ReplyScreenWrapperProps) {
+function ReplyScreenContainer({ route, navigation }: ReplyScreenWrapperProps) {
+  const { email } = route.params;
+
   return (
     <MainLayout
-      title="Sarah Kim"
+      title={email.senderName}
       subtitle="Reply"
       onBack={() => navigation.goBack()}
     >
       <ReplyScreen
+        email={email}
         onSend={() =>
           navigation.navigate('MainTabs', {
             screen: 'Inbox',

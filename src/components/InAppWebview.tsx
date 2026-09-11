@@ -80,7 +80,22 @@ export function InAppWebView({
             onLoadStart={() => setLoading(true)}
             onLoadEnd={() => setLoading(false)}
             onShouldStartLoadWithRequest={request => {
+              console.log('===== WEBVIEW REQUEST =====');
+              console.log(request.url);
+
               const requestUrl = request.url;
+
+              const isNylasCallback = requestUrl.includes(
+                '/functions/v1/nylas-oauth-callback',
+              );
+
+              console.log('IS NYLAS CALLBACK:', isNylasCallback);
+
+              if (isNylasCallback) {
+                console.log('NYLAS CALLBACK ALLOWED TO CONTINUE:', requestUrl);
+
+                return true;
+              }
 
               const callbackPath = '/functions/v1/duffel-checkout-callback';
 
@@ -98,8 +113,15 @@ export function InAppWebView({
               return true;
             }}
             onNavigationStateChange={navigationState => {
+              console.log('===== WEBVIEW NAVIGATION =====');
+              console.log(navigationState.url);
+
               const navigationUrl = navigationState.url;
 
+              /*
+               * Existing Duffel behavior.
+               * Do not change this.
+               */
               const callbackPath = '/functions/v1/duffel-checkout-callback';
 
               if (navigationUrl.includes(callbackPath)) {

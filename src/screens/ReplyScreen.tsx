@@ -1,91 +1,155 @@
 import React, { useState } from 'react';
-import { View, ScrollView, Pressable, Text, ActivityIndicator } from 'react-native';
+import { View, ScrollView, Text } from 'react-native';
+
 import styles from '../styles/styles';
 import { PrimaryButton } from '../components';
-import { VoiceService } from '../services/voiceService';
-import { AIService } from '../services/aiService';
+import { VoiceSearchInput } from '../components/VoiceSearchInput';
 import { NylasService } from '../services/nylasService';
+import { EmailMessage } from '../types';
 
 interface ReplyScreenProps {
+  email: EmailMessage;
   onSend: () => void;
 }
 
-export function ReplyScreen({ onSend }: ReplyScreenProps) {
-  const [isListening, setIsListening] = useState(false);
-  const [loadingDraft, setLoadingDraft] = useState(false);
+export function ReplyScreen({ email, onSend }: ReplyScreenProps) {
+  const [prompt, setPrompt] = useState('');
   const [sending, setSending] = useState(false);
-  const [aiDraft, setAiDraft] = useState(
-    "Hi Sarah, thanks for the update — the revised payment terms work on our end. Let's plan to finalize by Friday as proposed."
-  );
 
-  const waveform = Array.from({ length: 24 }, (_, i) => ({
-    height: Math.sin((i / 24) * Math.PI * 2) * 12 + 16,
-    key: i,
-  }));
+  /**
+   * -----------------------------------------
+   * Voice processing state
+   * -----------------------------------------
+   */
+  const [isVoiceProcessing, setIsVoiceProcessing] = useState(false);
 
-  const handleMicToggle = async () => {
-    if (!isListening) {
-      setIsListening(true);
-      await VoiceService.startRecording();
-    } else {
-      setIsListening(false);
-      setLoadingDraft(true);
-      const { transcript } = await VoiceService.stopAndTranscribe();
-      if (transcript) {
-        const generatedDraft = await AIService.generatePolishedReply(
-          'Q3 Board Deck Review & Timeline',
-          'Hi Omar, attached is the revised slide deck for next week’s board meeting. Please confirm slide 4 budget projections.',
-          transcript
-        );
-        setAiDraft(generatedDraft);
-      }
-      setLoadingDraft(false);
+  /**
+   * -----------------------------------------
+   * Recording state
+   * -----------------------------------------
+   */
+  const handleRecordingStateChange = (isRecording: boolean) => {
+    // VoiceSearchInput manages the actual recording.
+    // We keep this callback available so the screen
+    // can react to recording state later if needed.
+    console.log('Reply recording state:', isRecording);
+  };
+
+  /**
+   * -----------------------------------------
+   * Processing state
+   * -----------------------------------------
+   */
+  const handleProcessingStateChange = (isProcessing: boolean) => {
+    setIsVoiceProcessing(isProcessing);
+  };
+
+  /**
+   * -----------------------------------------
+   * Reply input submit
+   * -----------------------------------------
+   *
+   * The user's typed/voice reply instruction is kept
+   * in `prompt`.
+   *
+   * AI draft generation will be handled through the
+   * appropriate Supabase Edge Function rather than
+   * calling AIService directly from this screen.
+   */
+  const handleSubmitEditing = () => {
+    if (!prompt.trim() || isVoiceProcessing) {
+      return;
+    }
+
+    // Intentionally no AIService call here.
+    //
+    // The prompt is already available in state and can
+    // be sent to the Reply Edge Function when that flow
+    // is integrated.
+  };
+
+  /**
+   * -----------------------------------------
+   * Send reply
+   * -----------------------------------------
+   */
+  const handleSendDraft = async () => {
+    if (!prompt.trim() || sending) {
+      return;
+    }
+
+    setSending(true);
+
+    try {
+      const replySubject = email.subject.startsWith('Re:')
+        ? email.subject
+        : `Re: ${email.subject}`;
+
+      await NylasService.sendEmailDraft(
+        email.senderEmail,
+        replySubject,
+        prompt,
+      );
+
+      onSend();
+    } catch (error) {
+      console.error('Failed to send reply:', error);
+    } finally {
+      setSending(false);
     }
   };
 
-  const handleSendDraft = async () => {
-    setSending(true);
-    await NylasService.sendEmailDraft('sarah.kim@acme.com', 'Re: Q3 Board Deck Review & Timeline', aiDraft);
-    setSending(false);
-    onSend();
-  };
-
   return (
-    <ScrollView contentContainerStyle={styles.replyScreenContent} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      contentContainerStyle={styles.replyScreenContent}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* ---------------------------------- */}
+      {/* Email summary */}
+      {/* ---------------------------------- */}
+
       <View style={styles.bubbleCard}>
-        <Text style={styles.bubbleText}>
-          Hi — can we finalize the contract terms by Friday? Let me know if the revised clause on
-          payment terms works for you.
-        </Text>
+        <Text style={styles.bubbleText}>{email.summary}</Text>
       </View>
 
-      <Text style={styles.centerLabel}>Dictate your reply</Text>
+      {/* ---------------------------------- */}
+      {/* Voice / text reply input */}
+      {/* ---------------------------------- */}
 
-      <Pressable style={styles.micRingLarge} onPress={handleMicToggle}>
-        {isListening && (
-          <View style={styles.waveformContainer}>
-            {waveform.map(bar => (
-              <View key={bar.key} style={[styles.waveformBar, { height: bar.height }]} />
-            ))}
-          </View>
-        )}
-        <Text style={styles.micIconLarge}>🎤</Text>
-      </Pressable>
+      <VoiceSearchInput
+        value={prompt}
+        onChangeText={setPrompt}
+        placeholder="Say or type your reply..."
+        onSubmitEditing={handleSubmitEditing}
+        onRecordingStateChange={handleRecordingStateChange}
+        onProcessingStateChange={handleProcessingStateChange}
+        showClearButton
+        multiline
+        numberOfLines={3}
+        disabled={sending}
+      />
 
-      <Text style={styles.hintText}>{isListening ? 'Listening... Tap to process' : 'Tap to dictate'}</Text>
+      {/* ---------------------------------- */}
+      {/* Current reply */}
+      {/* ---------------------------------- */}
 
       <View style={styles.draftBoxEnhanced}>
-        <Text style={styles.replyLabel}>AI-drafted reply</Text>
-        {loadingDraft ? (
-          <ActivityIndicator size="small" color="#1E293B" style={{ marginVertical: 12 }} />
-        ) : (
-          <Text style={styles.replyCopy}>{aiDraft}</Text>
-        )}
+        <Text style={styles.replyLabel}>Reply</Text>
+
+        <Text style={styles.replyCopy}>
+          {prompt || 'Your reply will appear here.'}
+        </Text>
+
         <View style={styles.draftStatus}>
           <Text style={styles.draftStatusDot}>●</Text>
-          <Text style={styles.draftStatusText}>Ready to send (Zero-retention mode)</Text>
+
+          <Text style={styles.draftStatusText}>Ready to send</Text>
         </View>
       </View>
+
+      {/* ---------------------------------- */}
+      {/* Send */}
+      {/* ---------------------------------- */}
 
       <PrimaryButton
         text={sending ? 'Sending via Nylas...' : 'Send reply →'}

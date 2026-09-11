@@ -624,3 +624,58 @@ entrypoint = "./functions/recommend-restaurant/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/recommend-restaurant/*.html" ]
+
+[functions.nylas-oauth-start]
+enabled = true
+verify_jwt = false
+import_map = "./functions/nylas-oauth-start/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/nylas-oauth-start/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/nylas-oauth-start/*.html" ]
+
+[functions.nylas-oauth-callback]
+enabled = true
+verify_jwt = false
+import_map = "./functions/nylas-oauth-callback/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/nylas-oauth-callback/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/nylas-oauth-callback/*.html" ]
+
+[functions.get-todays-bookings]
+enabled = true
+verify_jwt = false
+import_map = "./functions/get-todays-bookings/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/get-todays-bookings/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/get-todays-bookings/*.html" ]
+
+[functions.nylas-fetch-emails]
+enabled = true
+verify_jwt = false
+import_map = "./functions/nylas-fetch-emails/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/nylas-fetch-emails/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/nylas-fetch-emails/*.html" ]
+
+[functions.nylas-triage-emails]
+enabled = true
+verify_jwt = false
+import_map = "./functions/nylas-triage-emails/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/nylas-triage-emails/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/nylas-triage-emails/*.html" ]

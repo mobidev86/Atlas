@@ -81,14 +81,14 @@ function HomeTabScreen({ navigation }: { navigation: HomeScreenNavProp }) {
 
 function TravelTabScreen({ navigation }: { navigation: TravelScreenNavProp }) {
   const handleBook = (item: string, provider: string, price: string) => {
-    navigation.navigate('Confirm', {
-      confirmation: {
-        item,
-        provider,
-        price,
-        subtitle: `Booked via ${provider}`,
-      },
-    });
+    // navigation.navigate('Confirm', {
+    //   confirmation: {
+    //     item,
+    //     provider,
+    //     price,
+    //     subtitle: `Booked via ${provider}`,
+    //   },
+    // });
   };
 
   return (
@@ -104,14 +104,14 @@ function TravelTabScreen({ navigation }: { navigation: TravelScreenNavProp }) {
 
 function DiningTabScreen({ navigation }: { navigation: DiningScreenNavProp }) {
   const handleBook = (item: string, provider: string, price: string) => {
-    navigation.navigate('Confirm', {
-      confirmation: {
-        item,
-        provider,
-        price,
-        subtitle: `Booked via ${provider}`,
-      },
-    });
+    // navigation.navigate('Confirm', {
+    //   confirmation: {
+    //     item,
+    //     provider,
+    //     price,
+    //     subtitle: `Booked via ${provider}`,
+    //   },
+    // });
   };
 
   return (
@@ -132,7 +132,13 @@ function InboxTabScreen({ navigation }: { navigation: InboxScreenNavProp }) {
       subtitle="Today's priority mail"
       onBack={() => navigation.navigate('Home')}
     >
-      <InboxScreen onOpenReply={() => navigation.navigate('Reply')} />
+      <InboxScreen
+        onOpenReply={email =>
+          navigation.navigate('Reply', {
+            email,
+          })
+        }
+      />
     </MainLayout>
   );
 }

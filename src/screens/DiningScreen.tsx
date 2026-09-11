@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   ActivityIndicator,
@@ -7,12 +7,12 @@ import {
   Alert,
   Text,
 } from 'react-native';
-
 import { ResultCard, PrimaryButton } from '../components';
 import { VoiceSearchInput } from '../components/VoiceSearchInput';
 import { supabase } from '../services/supabase';
 import { useAuth } from '../context/AuthContext';
 import { InAppWebView } from '../components/InAppWebview';
+import GetLocation from 'react-native-get-location';
 
 interface DiningScreenProps {
   onBook: (item: string, provider: string, price: string) => void;
@@ -75,6 +75,9 @@ export function DiningScreen({ onBook }: DiningScreenProps) {
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const [latitude, setLatitude] = useState<number | null>(null);
+  const [longitude, setLongitude] = useState<number | null>(null);
+
   const [recommendations, setRecommendations] = useState<
     RestaurantRecommendation[]
   >([]);
@@ -85,6 +88,25 @@ export function DiningScreen({ onBook }: DiningScreenProps) {
   const [searchSource, setSearchSource] = useState<
     'google_places' | 'fallback_sample' | null
   >(null);
+
+  useEffect(() => {
+    getCurrentLocation();
+  }, []);
+
+  const getCurrentLocation = () => {
+    GetLocation.getCurrentPosition({
+      enableHighAccuracy: true,
+      timeout: 60000,
+    })
+      .then(location => {
+        setLatitude(location.latitude);
+        setLongitude(location.longitude);
+      })
+      .catch(error => {
+        const { code, message } = error;
+        console.warn(code, message);
+      });
+  };
 
   const handleSearch = async () => {
     if (loading) {

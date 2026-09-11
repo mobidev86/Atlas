@@ -5,16 +5,20 @@ import React, {
   useEffect,
   useRef,
   useMemo,
+  useCallback,
 } from 'react';
+
 import { AuthService } from '../services/authService';
 import { SubscriptionService } from '../services/subscriptionService';
 import { supabase } from '../services/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
 import {
   DiningPreferences,
   TravelPreferences,
   UserProfile,
 } from '../types/UserProfile';
+
 import { ONBOARDING_KEY } from '../config/constants';
 import { Subscription } from '../types/Subscription';
 import { RealtimeChannel } from '@supabase/supabase-js';
@@ -38,8 +42,11 @@ interface AuthContextType {
   isSubscriptionLoading: boolean;
   subscriptionChecked: boolean;
   authRouteState: AuthRouteState;
+
   refreshSubscription: (user?: UserProfile | null) => Promise<void>;
+
   completeOnboarding: () => Promise<void>;
+
   login: (
     email: string,
     password: string,
@@ -47,6 +54,7 @@ interface AuthContextType {
     success: boolean;
     error: string | null;
   }>;
+
   register: (
     email: string,
     password: string,
@@ -55,34 +63,40 @@ interface AuthContextType {
     success: boolean;
     error: string | null;
   }>;
+
   logout: () => Promise<void>;
-  subscribe: () => Promise<{ success: boolean; error: string | null }>;
+
+  subscribe: () => Promise<{
+    success: boolean;
+    error: string | null;
+  }>;
+
   refreshProfile: () => Promise<void>;
+
   updateTravelPreferences: (prefs: Partial<TravelPreferences>) => Promise<void>;
+
   updateDiningPreferences: (prefs: Partial<DiningPreferences>) => Promise<void>;
+
   toggleAutoBook: () => Promise<void>;
+
   toggleZeroRetention: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
-  children,
-}) => {
+export const AuthProvider: React.FC<{
+  children: React.ReactNode;
+}> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
+
   const [subscription, setSubscription] = useState<Subscription | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
 
-  /**
-   * This only represents the initial auth/session restoration.
-   *
-   * IMPORTANT:
-   * We no longer keep this true while waiting for subscription.
-   */
   const [isInitialLoading, setIsInitialLoading] = useState(true);
 
   const [isSubscriptionLoading, setIsSubscriptionLoading] = useState(false);
+
   const [subscriptionChecked, setSubscriptionChecked] = useState(false);
 
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
@@ -90,26 +104,198 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const profileChannelRef = useRef<RealtimeChannel | null>(null);
 
   /**
-   * -----------------------------------------
-   * Initial Auth Initialization
-   * -----------------------------------------
+   * ------------------------------------------------------------
+   * INITIALIZATION STATE
+   * ------------------------------------------------------------
    *
+   * During startup, restoreSession() is the single owner of:
+   *
+   * Supabase session
+   *        ↓
+   * application profile
+   *
+   * Auth events received during this period are ignored.
+   */
+  const initializationCompleteRef = useRef(false);
+
+  /**
+   * Used to invalidate stale async auth operations.
+   */
+  const authOperationRef = useRef(0);
+
+  /**
+   * Prevent duplicate subscription requests for the
+   * same user.
+   */
+  const subscriptionRequestRef = useRef<{
+    userId: string | null;
+    promise: Promise<void> | null;
+  }>({
+    userId: null,
+    promise: null,
+  });
+
+  /**
+   * Prevent duplicate processing of TOKEN_REFRESHED events.
+   */
+  const lastProcessedUserIdRef = useRef<string | null>(null);
+
+  /**
    * IMPORTANT:
    *
-   * Session restoration and subscription
-   * loading are now separate.
+   * login() and register() already resolve the complete
+   * UserProfile themselves.
    *
-   * Once we know the user is logged in,
-   * we allow the app to proceed immediately.
-   *
-   * Subscription is refreshed in the
-   * background.
+   * While those methods are running, Supabase can emit
+   * SIGNED_IN. We don't want the auth listener to call
+   * ProfileService.getCurrentProfile() a second time.
+   */
+  const authActionInProgressRef = useRef(false);
+
+  /**
+   * ------------------------------------------------------------
+   * REFRESH SUBSCRIPTION
+   * ------------------------------------------------------------
+   */
+  const refreshSubscription = useCallback(
+    async (resolvedUser?: UserProfile | null) => {
+      const currentUser = resolvedUser !== undefined ? resolvedUser : user;
+
+      if (!currentUser?.id) {
+        setSubscription(null);
+        setIsSubscriptionLoading(false);
+        setSubscriptionChecked(true);
+
+        subscriptionRequestRef.current = {
+          userId: null,
+          promise: null,
+        };
+
+        return;
+      }
+
+      const userId = currentUser.id;
+
+      /**
+       * Reuse an existing subscription request for
+       * the same user.
+       */
+      if (
+        subscriptionRequestRef.current.userId === userId &&
+        subscriptionRequestRef.current.promise
+      ) {
+        await subscriptionRequestRef.current.promise;
+        return;
+      }
+
+      const operationId = authOperationRef.current;
+
+      /**
+       * Create the promise without referencing a
+       * not-yet-assigned const from inside itself.
+       */
+      const requestPromise = (async () => {
+        try {
+          setIsSubscriptionLoading(true);
+
+          /**
+           * IMPORTANT:
+           *
+           * userId is passed directly.
+           *
+           * SubscriptionService therefore does not need
+           * to resolve the authenticated user again.
+           */
+          const result = await SubscriptionService.getCurrentSubscription(
+            userId,
+          );
+
+          /**
+           * Ignore stale results if the authentication
+           * operation has changed.
+           */
+          if (operationId !== authOperationRef.current) {
+            return;
+          }
+
+          /**
+           * Make sure the result still belongs to the
+           * currently displayed user.
+           */
+          setUser(currentUserState => {
+            if (!currentUserState || currentUserState.id !== userId) {
+              return currentUserState;
+            }
+
+            return currentUserState;
+          });
+
+          /**
+           * Your SubscriptionService returns:
+           *
+           * {
+           *   subscription: Subscription | null;
+           *   error: string | null;
+           * }
+           *
+           * Use the existing Subscription type from
+           * ../types/Subscription.
+           */
+          setSubscription(result.subscription ?? null);
+
+          if (result.error) {
+            console.warn('[AuthContext] Subscription lookup:', result.error);
+          }
+        } catch (error) {
+          console.error('[AuthContext] refreshSubscription failed:', error);
+
+          if (operationId === authOperationRef.current) {
+            setSubscription(null);
+          }
+        } finally {
+          if (operationId === authOperationRef.current) {
+            setIsSubscriptionLoading(false);
+            setSubscriptionChecked(true);
+          }
+
+          /**
+           * Clear request tracking only if this still
+           * belongs to the same user.
+           */
+          if (subscriptionRequestRef.current.userId === userId) {
+            subscriptionRequestRef.current = {
+              userId: null,
+              promise: null,
+            };
+          }
+        }
+      })();
+
+      subscriptionRequestRef.current = {
+        userId,
+        promise: requestPromise,
+      };
+
+      await requestPromise;
+    },
+    [user],
+  );
+
+  /**
+   * ------------------------------------------------------------
+   * INITIAL AUTH INITIALIZATION
+   * ------------------------------------------------------------
    */
   useEffect(() => {
     let mounted = true;
 
     const initAuth = async () => {
       try {
+        /**
+         * ------------------------------------------------------
+         * Load onboarding state
+         * ------------------------------------------------------
+         */
         const onboardingFlag = await AsyncStorage.getItem(ONBOARDING_KEY);
 
         if (!mounted) {
@@ -119,7 +305,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         setHasCompletedOnboarding(onboardingFlag === 'true');
 
         /**
-         * Restore the Supabase session.
+         * ------------------------------------------------------
+         * Restore auth session + profile
+         * ------------------------------------------------------
+         *
+         * This is the ONLY initial profile resolution.
          */
         const result = await AuthService.restoreSession();
 
@@ -127,50 +317,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           return;
         }
 
-        setUser(result.user);
-
-        /**
-         * ---------------------------------------
-         * Authenticated user
-         * ---------------------------------------
-         *
-         * IMPORTANT:
-         *
-         * Do NOT mark subscription as checked here.
-         *
-         * subscriptionChecked = false means:
-         *
-         * "We have a user, but subscription
-         * information is still being resolved."
-         *
-         * authRouteState intentionally treats this
-         * state as HOME so the subscription request
-         * cannot block or flash the SubscriptionScreen.
-         */
         if (result.user) {
-          setSubscriptionChecked(false);
+          /**
+           * Actual application UserProfile.
+           */
+          setUser(result.user);
+
+          lastProcessedUserIdRef.current = result.user.id;
 
           /**
-           * Background subscription refresh.
+           * Start subscription lookup in background.
            *
-           * We intentionally do NOT await this.
-           *
-           * The user can enter Home immediately.
+           * DO NOT await this.
            */
           refreshSubscription(result.user).catch(error => {
-            console.error('Background subscription refresh failed:', error);
+            console.error(
+              '[AuthContext] Background subscription refresh failed:',
+              error,
+            );
           });
         } else {
           /**
-           * No logged-in user.
-           *
-           * There is no subscription to resolve.
+           * No authenticated user.
            */
+          setUser(null);
           setSubscription(null);
           setSubscriptionChecked(true);
         }
       } catch (error) {
-        console.error('initAuth failed:', error);
+        console.error('[AuthContext] initAuth failed:', error);
 
         if (mounted) {
           setUser(null);
@@ -180,103 +355,191 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       } finally {
         if (mounted) {
           /**
-           * Session restoration is complete.
+           * VERY IMPORTANT:
            *
-           * IMPORTANT:
+           * Always mark initial initialization complete.
            *
-           * This only controls the initial loading screen.
-           * It does NOT mean subscription checking is complete.
+           * Do NOT use authOperationRef to decide whether
+           * this should happen.
            */
+          initializationCompleteRef.current = true;
+
           setIsInitialLoading(false);
         }
       }
     };
 
-    initAuth();
+    void initAuth();
 
-    const { data: listener } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
-        /**
-         * Supabase fires INITIAL_SESSION immediately
-         * when the listener is registered.
-         *
-         * initAuth() already handles that.
-         */
-        if (_event === 'INITIAL_SESSION') {
-          return;
-        }
+    /**
+     * ------------------------------------------------------------
+     * SUPABASE AUTH LISTENER
+     * ------------------------------------------------------------
+     */
+    const {
+      data: { subscription: authListener },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      /**
+       * INITIAL_SESSION is handled by initAuth().
+       */
+      if (event === 'INITIAL_SESSION') {
+        return;
+      }
 
-        /**
-         * ---------------------------------------
-         * Logged out
-         * ---------------------------------------
-         */
-        if (!session) {
-          setUser(null);
-          setSubscription(null);
-          setSubscriptionChecked(false);
-          setIsSubscriptionLoading(false);
+      /**
+       * During initial startup, initAuth() owns
+       * session/profile restoration.
+       *
+       * Ignore auth events here.
+       */
+      if (!initializationCompleteRef.current) {
+        return;
+      }
 
-          return;
-        }
+      /**
+       * ------------------------------------------------------
+       * LOGIN / REGISTER
+       * ------------------------------------------------------
+       *
+       * AuthService.login() / register() already loads
+       * ProfileService.getCurrentProfile().
+       *
+       * Don't do it again from this listener.
+       */
+      if (authActionInProgressRef.current) {
+        return;
+      }
 
-        /**
-         * ---------------------------------------
-         * Logged in / session changed
-         * ---------------------------------------
-         */
+      const operationId = ++authOperationRef.current;
+
+      /**
+       * ------------------------------------------------------
+       * SIGNED OUT
+       * ------------------------------------------------------
+       */
+      if (event === 'SIGNED_OUT' || !session?.user) {
+        subscriptionRequestRef.current = {
+          userId: null,
+          promise: null,
+        };
+
+        lastProcessedUserIdRef.current = null;
+
+        setUser(null);
+        setSubscription(null);
+        setSubscriptionChecked(true);
+        setIsSubscriptionLoading(false);
+
+        return;
+      }
+
+      /**
+       * ------------------------------------------------------
+       * TOKEN REFRESH
+       * ------------------------------------------------------
+       *
+       * A token refresh does not need another profile
+       * request when we already have the same user.
+       */
+      if (
+        event === 'TOKEN_REFRESHED' &&
+        lastProcessedUserIdRef.current === session.user.id
+      ) {
+        return;
+      }
+
+      try {
         setSubscriptionChecked(false);
 
-        try {
-          /**
-           * Fetch profile.
-           */
-          const profile = await ProfileService.getCurrentProfile();
+        /**
+         * For genuine auth changes occurring after
+         * startup, resolve the application profile.
+         */
+        const profile = await ProfileService.getCurrentProfile();
 
-          if (!mounted) {
-            return;
-          }
-
-          setUser(profile.user);
-
-          if (profile.user) {
-            /**
-             * For login/session changes we still
-             * fetch the subscription.
-             *
-             * However, we don't need to block the
-             * auth session restoration itself.
-             */
-            await refreshSubscription(profile.user);
-          } else {
-            setSubscriptionChecked(true);
-          }
-        } catch (error) {
-          console.error('onAuthStateChange profile handling failed:', error);
-
-          if (mounted) {
-            setSubscriptionChecked(true);
-          }
+        /**
+         * Ignore stale auth event.
+         */
+        if (!mounted || operationId !== authOperationRef.current) {
+          return;
         }
-      },
-    );
+
+        if (!profile.user) {
+          setUser(null);
+          setSubscription(null);
+          setSubscriptionChecked(true);
+
+          return;
+        }
+
+        /**
+         * Make sure the returned profile belongs
+         * to the current Supabase auth user.
+         */
+        if (profile.user.id !== session.user.id) {
+          console.warn('[AuthContext] Profile/auth user mismatch.');
+
+          return;
+        }
+
+        lastProcessedUserIdRef.current = profile.user.id;
+
+        setUser(profile.user);
+
+        /**
+         * Clear previous subscription immediately
+         * when switching users.
+         */
+        setSubscription(null);
+
+        /**
+         * Background subscription lookup.
+         */
+        refreshSubscription(profile.user).catch(error => {
+          console.error(
+            '[AuthContext] Auth event subscription refresh failed:',
+            error,
+          );
+        });
+      } catch (error) {
+        console.error(
+          '[AuthContext] Auth event profile handling failed:',
+          error,
+        );
+
+        if (mounted && operationId === authOperationRef.current) {
+          setUser(null);
+          setSubscription(null);
+          setSubscriptionChecked(true);
+        }
+      }
+    });
 
     return () => {
       mounted = false;
-      listener.subscription.unsubscribe();
+
+      authListener.unsubscribe();
+
+      if (profileChannelRef.current) {
+        void supabase.removeChannel(profileChannelRef.current);
+
+        profileChannelRef.current = null;
+      }
     };
 
+    // This initialization/listener effect must run once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**
-   * -----------------------------------------
-   * Profile Realtime Subscription
-   * -----------------------------------------
+   * ------------------------------------------------------------
+   * PROFILE REALTIME SUBSCRIPTION
+   * ------------------------------------------------------------
    */
   useEffect(() => {
     if (profileChannelRef.current) {
-      supabase.removeChannel(profileChannelRef.current);
+      void supabase.removeChannel(profileChannelRef.current);
+
       profileChannelRef.current = null;
     }
 
@@ -284,34 +547,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       return;
     }
 
+    const userId = user.id;
+
     const channel = supabase
-      .channel(`profile-settings-${user.id}`)
+      .channel(`profile-settings-${userId}`)
       .on(
         'postgres_changes',
         {
           event: 'UPDATE',
           schema: 'public',
           table: 'profiles',
-          filter: `id=eq.${user.id}`,
+          filter: `id=eq.${userId}`,
         },
         async payload => {
           /**
-           * User was banned from dashboard.
+           * User banned.
            */
           if (payload.new.is_banned) {
             await logout();
             return;
           }
 
-          setUser(prev =>
-            prev
-              ? {
-                  ...prev,
-                  autoBookEnabled: payload.new.auto_book_enabled,
-                  zeroRetentionEnabled: payload.new.zero_retention_enabled,
-                }
-              : prev,
-          );
+          setUser(previousUser => {
+            if (!previousUser || previousUser.id !== userId) {
+              return previousUser;
+            }
+
+            return {
+              ...previousUser,
+
+              autoBookEnabled: payload.new.auto_book_enabled,
+
+              zeroRetentionEnabled: payload.new.zero_retention_enabled,
+            };
+          });
         },
       )
       .subscribe();
@@ -319,59 +588,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     profileChannelRef.current = channel;
 
     return () => {
-      if (profileChannelRef.current) {
-        supabase.removeChannel(profileChannelRef.current);
+      if (profileChannelRef.current === channel) {
+        void supabase.removeChannel(channel);
+
         profileChannelRef.current = null;
       }
     };
 
+    // logout is intentionally excluded because changing
+    // logout's callback identity must not recreate this channel.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
   /**
-   * -----------------------------------------
-   * Subscription Refresh
-   * -----------------------------------------
-   */
-  const refreshSubscription = async (resolvedUser?: UserProfile | null) => {
-    const currentUser = resolvedUser !== undefined ? resolvedUser : user;
-
-    if (!currentUser) {
-      setSubscription(null);
-      setSubscriptionChecked(true);
-      return;
-    }
-
-    try {
-      setIsSubscriptionLoading(true);
-
-      const { subscription } = await SubscriptionService.getCurrentSubscription(
-        currentUser.id,
-      );
-
-      setSubscription(subscription);
-    } catch (err) {
-      console.error('refreshSubscription failed:', err);
-
-      setSubscription(null);
-    } finally {
-      setIsSubscriptionLoading(false);
-      setSubscriptionChecked(true);
-    }
-  };
-
-  /**
-   * -----------------------------------------
-   * Login
-   * -----------------------------------------
+   * ------------------------------------------------------------
+   * LOGIN
+   * ------------------------------------------------------------
    */
   const login = async (email: string, password: string) => {
     try {
       setIsLoading(true);
 
+      /**
+       * Invalidate previous async subscription work.
+       */
+      authOperationRef.current += 1;
+
+      subscriptionRequestRef.current = {
+        userId: null,
+        promise: null,
+      };
+
+      /**
+       * Clear old subscription while login is happening.
+       */
+      setSubscription(null);
+      setSubscriptionChecked(false);
+
+      /**
+       * Prevent SIGNED_IN listener from fetching the
+       * profile a second time.
+       */
+      authActionInProgressRef.current = true;
+
       const result = await AuthService.login(email, password);
 
-      if (result.user === null) {
+      if (!result.user) {
+        setSubscription(null);
+        setSubscriptionChecked(true);
+
         return {
           success: false,
           error: result.error || 'Login failed.',
@@ -379,94 +644,159 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       }
 
       /**
-       * Supabase onAuthStateChange handles:
-       *
-       * user
-       * profile
-       * subscription
+       * AuthService already resolved the complete
+       * UserProfile.
        */
+      setUser(result.user);
+
+      lastProcessedUserIdRef.current = result.user.id;
+
+      /**
+       * Subscription lookup happens in background.
+       */
+      void refreshSubscription(result.user);
+
       return {
         success: true,
         error: null,
       };
     } catch (error: any) {
+      setSubscription(null);
+      setSubscriptionChecked(true);
+
       return {
         success: false,
-        error: error.message,
+        error: error?.message || 'Login failed.',
       };
     } finally {
+      /**
+       * Allow subsequent auth events to be handled.
+       */
+      authActionInProgressRef.current = false;
+
       setIsLoading(false);
     }
   };
 
   /**
-   * -----------------------------------------
-   * Register
-   * -----------------------------------------
+   * ------------------------------------------------------------
+   * REGISTER
+   * ------------------------------------------------------------
    */
   const register = async (email: string, password: string, name?: string) => {
     try {
       setIsLoading(true);
+
+      authOperationRef.current += 1;
+
+      subscriptionRequestRef.current = {
+        userId: null,
+        promise: null,
+      };
+
+      setSubscription(null);
       setSubscriptionChecked(false);
+
+      /**
+       * Prevent SIGNED_IN from causing another
+       * profile lookup while AuthService.register()
+       * is already doing it.
+       */
+      authActionInProgressRef.current = true;
 
       const result = await AuthService.register(email, password, name);
 
-      setUser(result.user);
-
-      if (result.user) {
-        await SubscriptionService.createStripeCustomer();
-
-        await refreshSubscription(result.user);
-      } else {
+      if (!result.user) {
         setSubscriptionChecked(true);
+
+        return {
+          success: false,
+          error: result.error || 'Registration failed.',
+        };
       }
 
+      setUser(result.user);
+
+      lastProcessedUserIdRef.current = result.user.id;
+
+      void refreshSubscription(result.user);
+
       return {
-        success: !!result.user,
-        error: result.error,
+        success: true,
+        error: null,
       };
     } catch (error: any) {
       setSubscriptionChecked(true);
 
       return {
         success: false,
-        error: error.message ?? 'Registration failed.',
+        error: error?.message || 'Registration failed.',
       };
     } finally {
+      authActionInProgressRef.current = false;
+
       setIsLoading(false);
     }
   };
 
   /**
-   * -----------------------------------------
-   * Logout
-   * -----------------------------------------
+   * ------------------------------------------------------------
+   * LOGOUT
+   * ------------------------------------------------------------
    */
   const logout = async () => {
-    await AuthService.logout();
+    /**
+     * Invalidate all outstanding auth operations.
+     */
+    authOperationRef.current += 1;
 
-    setUser(null);
-    setSubscription(null);
-    setSubscriptionChecked(false);
-  };
+    /**
+     * Invalidate subscription request.
+     */
+    subscriptionRequestRef.current = {
+      userId: null,
+      promise: null,
+    };
 
-  /**
-   * -----------------------------------------
-   * Refresh Profile
-   * -----------------------------------------
-   */
-  const refreshProfile = async () => {
-    const result = await ProfileService.getCurrentProfile();
+    lastProcessedUserIdRef.current = null;
 
-    if (result.user) {
-      setUser(result.user);
+    try {
+      await AuthService.logout();
+    } finally {
+      setUser(null);
+      setSubscription(null);
+      setSubscriptionChecked(true);
+      setIsSubscriptionLoading(false);
     }
   };
 
   /**
-   * -----------------------------------------
-   * Onboarding
-   * -----------------------------------------
+   * ------------------------------------------------------------
+   * REFRESH PROFILE
+   * ------------------------------------------------------------
+   */
+  const refreshProfile = async () => {
+    try {
+      const result = await ProfileService.getCurrentProfile();
+
+      if (result.user) {
+        setUser(result.user);
+
+        /**
+         * Refresh subscription against the newly
+         * resolved profile.
+         */
+        void refreshSubscription(result.user);
+      }
+    } catch (error) {
+      console.error('[AuthContext] refreshProfile failed:', error);
+    }
+  };
+
+  /**
+   * ------------------------------------------------------------
+   * COMPLETE ONBOARDING
+   * ------------------------------------------------------------
    */
   const completeOnboarding = async () => {
     await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
@@ -475,25 +805,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   /**
-   * -----------------------------------------
-   * Subscribe
-   * -----------------------------------------
+   * ------------------------------------------------------------
+   * SUBSCRIBE
+   * ------------------------------------------------------------
    */
   const subscribe = async () => {
-    const { success, customerId, error } =
-      await SubscriptionService.subscribeUser();
+    try {
+      const result = await SubscriptionService.subscribeUser();
 
-    return {
-      success,
-      customerId,
-      error,
-    };
+      /**
+       * We don't need customerId in AuthContext.
+       */
+      return {
+        success: result.success,
+        error: result.error,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error?.message || 'Unable to subscribe.',
+      };
+    }
   };
 
   /**
-   * -----------------------------------------
-   * Travel Preferences
-   * -----------------------------------------
+   * ------------------------------------------------------------
+   * TRAVEL PREFERENCES
+   * ------------------------------------------------------------
    */
   const updateTravelPreferences = async (prefs: Partial<TravelPreferences>) => {
     if (!user) {
@@ -513,9 +851,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   /**
-   * -----------------------------------------
-   * Dining Preferences
-   * -----------------------------------------
+   * ------------------------------------------------------------
+   * DINING PREFERENCES
+   * ------------------------------------------------------------
    */
   const updateDiningPreferences = async (prefs: Partial<DiningPreferences>) => {
     if (!user) {
@@ -535,9 +873,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   /**
-   * -----------------------------------------
-   * Auto Book
-   * -----------------------------------------
+   * ------------------------------------------------------------
+   * AUTO BOOK
+   * ------------------------------------------------------------
    */
   const toggleAutoBook = async () => {
     if (!user) {
@@ -554,9 +892,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   /**
-   * -----------------------------------------
-   * Zero Retention
-   * -----------------------------------------
+   * ------------------------------------------------------------
+   * ZERO RETENTION
+   * ------------------------------------------------------------
    */
   const toggleZeroRetention = async () => {
     if (!user) {
@@ -572,32 +910,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  /**
+   * ------------------------------------------------------------
+   * DERIVED AUTH STATE
+   * ------------------------------------------------------------
+   */
   const isAuthenticated = !!user;
 
   const isSubscribed =
     subscription?.status === 'active' || subscription?.status === 'trialing';
 
   /**
-   * -----------------------------------------
-   * Auth Route State
-   * -----------------------------------------
+   * ------------------------------------------------------------
+   * ROUTE STATE
+   * ------------------------------------------------------------
    *
-   * IMPORTANT:
-   *
-   * For an authenticated user, we allow Home
-   * immediately while the subscription request
-   * is running.
-   *
-   * Once the subscription response arrives,
-   * this state automatically becomes either:
-   *
-   * home
-   *
-   * or
-   *
-   * subscription
+   * Subscription loading does NOT block Home.
    */
-  const authRouteState: AuthRouteState = useMemo(() => {
+  const authRouteState = useMemo<AuthRouteState>(() => {
+    if (isInitialLoading) {
+      return 'loading';
+    }
+
     if (!hasCompletedOnboarding) {
       return 'onboarding';
     }
@@ -607,57 +941,105 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
 
     /**
-     * Subscription is still being resolved.
+     * User is authenticated.
      *
-     * IMPORTANT:
-     *
-     * Always allow authenticated users into Home
-     * while this request is running.
+     * Don't wait for subscription lookup.
      */
     if (!subscriptionChecked) {
       return 'home';
     }
 
     return isSubscribed ? 'home' : 'subscription';
-  }, [hasCompletedOnboarding, user, subscriptionChecked, isSubscribed]);
+  }, [
+    isInitialLoading,
+    hasCompletedOnboarding,
+    user,
+    subscriptionChecked,
+    isSubscribed,
+  ]);
+
+  /**
+   * ------------------------------------------------------------
+   * CONTEXT VALUE
+   * ------------------------------------------------------------
+   */
+  const contextValue = useMemo<AuthContextType>(
+    () => ({
+      user,
+
+      isAuthenticated,
+      isSubscribed,
+
+      isLoading,
+      isInitialLoading,
+
+      hasCompletedOnboarding,
+
+      subscription,
+
+      isSubscriptionLoading,
+      subscriptionChecked,
+
+      authRouteState,
+
+      refreshSubscription,
+
+      completeOnboarding,
+
+      login,
+      register,
+      logout,
+
+      subscribe,
+
+      refreshProfile,
+
+      updateTravelPreferences,
+      updateDiningPreferences,
+
+      toggleAutoBook,
+      toggleZeroRetention,
+    }),
+    [
+      user,
+
+      isAuthenticated,
+      isSubscribed,
+
+      isLoading,
+      isInitialLoading,
+
+      hasCompletedOnboarding,
+
+      subscription,
+
+      isSubscriptionLoading,
+      subscriptionChecked,
+
+      authRouteState,
+
+      refreshSubscription,
+    ],
+  );
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        subscription,
-        isSubscriptionLoading,
-        subscriptionChecked,
-        authRouteState,
-        refreshSubscription,
-        isAuthenticated,
-        isSubscribed,
-        isLoading,
-        isInitialLoading,
-        hasCompletedOnboarding,
-        completeOnboarding,
-        login,
-        register,
-        logout,
-        refreshProfile,
-        subscribe,
-        updateTravelPreferences,
-        updateDiningPreferences,
-        toggleAutoBook,
-        toggleZeroRetention,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+    <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>
   );
 };
 
+/**
+ * ------------------------------------------------------------
+ * useAuth
+ * ------------------------------------------------------------
+ */
 export const useAuth = () => {
   const context = useContext(AuthContext);
 
   if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    throw new Error('useAuth must be used within AuthProvider');
   }
 
   return context;
 };
+
+export default AuthContext;

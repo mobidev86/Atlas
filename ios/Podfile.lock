@@ -2005,7 +2005,74 @@ PODS:
     - React-utils (= 0.86.0)
     - ReactNativeDependencies
   - ReactNativeDependencies (0.86.0)
+  - ReactNativeGetLocation (6.0.1):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - Yoga
   - RNCPicker (2.11.4):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - Yoga
+  - RNNotifee (10.7.1):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - RNNotifee/NotifeeCore (= 10.7.1)
+    - Yoga
+  - RNNotifee/NotifeeCore (10.7.1):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2266,7 +2333,9 @@ DEPENDENCIES:
   - ReactCodegen (from `build/generated/ios/ReactCodegen`)
   - ReactCommon/turbomodule/core (from `../node_modules/react-native/ReactCommon`)
   - ReactNativeDependencies (from `../node_modules/react-native/third-party-podspecs/ReactNativeDependencies.podspec`)
+  - ReactNativeGetLocation (from `../node_modules/react-native-get-location`)
   - "RNCPicker (from `../node_modules/@react-native-picker/picker`)"
+  - RNNotifee (from `../node_modules/react-native-notify-kit`)
   - RNScreens (from `../node_modules/react-native-screens`)
   - "stripe-react-native (from `../node_modules/@stripe/stripe-react-native`)"
   - Yoga (from `../node_modules/react-native/ReactCommon/yoga`)
@@ -2447,8 +2516,12 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native/ReactCommon"
   ReactNativeDependencies:
     :podspec: "../node_modules/react-native/third-party-podspecs/ReactNativeDependencies.podspec"
+  ReactNativeGetLocation:
+    :path: "../node_modules/react-native-get-location"
   RNCPicker:
     :path: "../node_modules/@react-native-picker/picker"
+  RNNotifee:
+    :path: "../node_modules/react-native-notify-kit"
   RNScreens:
     :path: "../node_modules/react-native-screens"
   stripe-react-native:
@@ -2538,7 +2611,9 @@ SPEC CHECKSUMS:
   ReactCodegen: ee39bbc365b4791c9b5183b52c533ebf586e1d8d
   ReactCommon: 4d01bfb533b93a2103329dfefc74db6a9e272888
   ReactNativeDependencies: fa0a54b3f5319ae0e3b9aff32bfee7a424b88e66
+  ReactNativeGetLocation: 904e0d83614cfc5569b95ee6070e2739118f2ae3
   RNCPicker: 5850b195903c126967b2dffcf9500299c8581177
+  RNNotifee: 5320ec18711ca4d37f22d963893e3fc874ce8025
   RNScreens: 39f914a099f9cbe0ec2c33d0dfd01ba56a8ca104
   Stripe: 42c446f3f3ee60c2e96aa27491fd88cb849a3887
   stripe-react-native: 72899fcddf017a9a02c6545c8c1ee297fcc57853

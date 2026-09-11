@@ -57,5 +57,7 @@
 	<string>We use speech recognition to understand your travel requests</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>We use the microphone to hear your travel requests</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+<string>This app needs to get your location to list your near by restaurants</string>
 </dict>
 </plist>
